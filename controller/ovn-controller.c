@@ -5434,6 +5434,8 @@ main(int argc, char *argv[])
             ovsrec_open_vswitch_table_get(ovs_idl_loop.idl);
         const struct ovsrec_bridge *br_int = NULL;
         const struct ovsrec_datapath *br_int_dp = NULL;
+        const struct ovsrec_open_vswitch *cfg =
+            ovsrec_open_vswitch_table_first(ovs_table);
         process_br_int(ovs_idl_txn, bridge_table, ovs_table, &br_int,
                        ovsrec_server_has_datapath_table(ovs_idl_loop.idl)
                        ? &br_int_dp
@@ -5446,24 +5448,24 @@ main(int argc, char *argv[])
 
         /* Enable ACL matching for double tagged traffic. */
         if (ovs_idl_txn) {
-            const struct ovsrec_open_vswitch *cfg =
-                ovsrec_open_vswitch_table_first(ovs_table);
-            int vlan_limit = smap_get_int(
-                &cfg->other_config, "vlan-limit", -1);
-            if (vlan_limit != 0) {
-                ovsrec_open_vswitch_update_other_config_setkey(
-                    cfg, "vlan-limit", "0");
+            if (cfg) {
+                int vlan_limit = smap_get_int(
+                    &cfg->other_config, "vlan-limit", -1);
+                if (vlan_limit != 0) {
+                    ovsrec_open_vswitch_update_other_config_setkey(
+                        cfg, "vlan-limit", "0");
+                }
             }
         }
 
         static bool chassis_idx_stored = false;
-        if (ovs_idl_txn && !chassis_idx_stored) {
-            store_chassis_index_if_needed(ovs_table);
+        if (ovs_idl_txn && !chassis_idx_stored) { //&& cfg) {
+            store_chassis_index_if_needed(ovs_table); //add check to this funct
             chassis_idx_stored = true;
         }
 
         if (ovsdb_idl_has_ever_connected(ovnsb_idl_loop.idl) &&
-            northd_version_match) {
+            northd_version_match && cfg) {
 
             /* Unconditionally remove all deleted lflows from the lflow
              * cache.
@@ -5550,7 +5552,7 @@ main(int argc, char *argv[])
                              * change tracking is improved, we can simply skip
                              * this round of engine_run and continue processing
                              * acculated changes incrementally later when
-                             * ofctrl_has_backlog() returns false. */
+             store_chassis_index_if_needed                * ofctrl_has_backlog() returns false. */
                             engine_run(false);
                         } else {
                             engine_run(true);
@@ -5877,7 +5879,6 @@ loop_done:
                 = ovsrec_bridge_table_get(ovs_idl_loop.idl);
             const struct ovsrec_open_vswitch_table *ovs_table
                 = ovsrec_open_vswitch_table_get(ovs_idl_loop.idl);
-
             const struct sbrec_port_binding_table *port_binding_table
                 = sbrec_port_binding_table_get(ovnsb_idl_loop.idl);
 
