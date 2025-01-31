@@ -95,6 +95,8 @@ enum mff_log_flags_bits {
     MLF_ICMP_SNAT_BIT = 17,
     MLF_OVERRIDE_LOCAL_ONLY_BIT = 18,
     MLF_FROM_CTRL_BIT = 19,
+    MLF_NETWORK_ID_START_BIT = 28,
+    MLF_NETWORK_ID_END_BIT = 31,
 };
 
 /* MFF_LOG_FLAGS_REG flag assignments */
@@ -152,6 +154,9 @@ enum mff_log_flags {
     MLF_ICMP_SNAT = (1 << MLF_ICMP_SNAT_BIT),
 
     MLF_OVERRIDE_LOCAL_ONLY = (1 << MLF_OVERRIDE_LOCAL_ONLY_BIT),
+
+    MLF_NETWORK_ID = ((MLF_NETWORK_ID_END_BIT - MLF_NETWORK_ID_START_BIT + 1)
+                       << MLF_NETWORK_ID_START_BIT) - 1,
 };
 
 /* OVN logical fields

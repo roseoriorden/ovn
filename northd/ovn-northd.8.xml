@@ -5256,18 +5256,19 @@ nd_ns {
           table="Logical_Router"/>:lb_force_snat_ip=router_ip), then for
           each logical router port <var>P</var> attached to the Gateway
           router, a priority-110 flow matches
-          <code>flags.force_snat_for_lb == 1 &amp;&amp; outport == <var>P</var>
-          </code> with an action <code>ct_snat(<var>R</var>);</code>
-          where <var>R</var> is the IP configured on the router port.
-          If <code>R</code> is an IPv4 address then the match will also
-          include <code>ip4</code> and if it is an IPv6 address, then the
-          match will also include <code>ip6</code>.
+          <code>flags.force_snat_for_lb == 1 &amp;&amp; flags.network_id ==
+          <var>I</var> &amp;&amp; outport == <var>P</var></code>, where
+          <var>I</var> is the network index, with an action
+          <code>ct_snat(<var>R</var>);</code> where <var>R</var> is the IP
+          configured on the router port. If <code>R</code> is an IPv4 address
+          then the match will also include <code>ip4</code> and if it is an
+          IPv6 address, then the match will also include <code>ip6</code>.
         </p>
 
         <p>
           If the logical router port <var>P</var> is configured with multiple
-          IPv4 and multiple IPv6 addresses, only the first IPv4 and first IPv6
-          address is considered.
+          IPv4 and multiple IPv6 addresses, the IPv4 and IPv6 address within
+          the same network as the next-hop will be chosen.
         </p>
       </li>
 
