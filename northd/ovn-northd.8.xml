@@ -5066,7 +5066,44 @@ icmp6 {
       </li>
     </ul>
 
-   <h3>Ingress Table 25: ARP Request</h3>
+   <h3>Ingress Table 25: Network ID</h3>
+
+    <p>
+      This table generates flows that set flags.network_id. It holds the
+      following flows:
+    </p>
+
+    <ul>
+      <li>
+        <p>
+          A priority-110 flow for IPv4 packets with match <code>outport ==
+          <var>P</var> &amp;&amp; REG_NEXT_HOP_IPV4 ==
+          <var>I</var>/<var>C</var></code>, and actions <code>flags.network_id
+          = <var>N</var>; next;</code>.
+        </p>
+
+        <p>
+          Where <var>P</var> is the outport, <var>I</var> is the next-hop IP,
+          <var>C</var> is the next-hop network CIDR, and <var>N</var> is the
+          network id (index).
+        </p>
+
+        <p>
+        <code>flags.network_id</code> is 4 bits, and thus only 16 networks can
+        be indexed. If the number of networks is greater than 16, networks 17
+        and up will have the actions <code>flags.network_id = 0; next;</code>
+        and only the first lexicographical IP will be considered for SNAT for
+        those networks.
+        </p>
+      </li>
+
+      <li>
+        Catch-all: A priority-0 flow with match <code>1</code> has
+        actions <code>next;</code>.
+      </li>
+    </ul>
+
+   <h3>Ingress Table 26: ARP Request</h3>
 
     <p>
       In the common case where the Ethernet destination has been resolved, this
@@ -5330,18 +5367,22 @@ nd_ns {
           table="Logical_Router"/>:lb_force_snat_ip=router_ip), then for
           each logical router port <var>P</var> attached to the Gateway
           router, a priority-110 flow matches
-          <code>flags.force_snat_for_lb == 1 &amp;&amp; outport == <var>P</var>
-          </code> with an action <code>ct_snat(<var>R</var>);</code>
-          where <var>R</var> is the IP configured on the router port.
-          If <code>R</code> is an IPv4 address then the match will also
-          include <code>ip4</code> and if it is an IPv6 address, then the
-          match will also include <code>ip6</code>.
+          <code>flags.force_snat_for_lb == 1 &amp;&amp; flags.network_id ==
+          <var>N</var> &amp;&amp; outport == <var>P</var></code>, where
+          <var>N</var> is the network index, with an action
+          <code>ct_snat(<var>R</var>);</code> where <var>R</var> is the IP
+          configured on the router port. If <code>R</code> is an IPv4 address
+          then the match will also include <code>ip4</code> and if it is an
+          IPv6 address, then the match will also include <code>ip6</code>.
+          <var>N</var>, the network index, will be 0 for networks 17 and up.
         </p>
 
         <p>
           If the logical router port <var>P</var> is configured with multiple
-          IPv4 and multiple IPv6 addresses, only the first IPv4 and first IPv6
-          address is considered.
+          IPv4 and multiple IPv6 addresses, the IPv4 and IPv6 address within
+          the same network as the next-hop will be chosen. However, if there
+          are more than 16 networks configured, the first lexicographical IP
+          will be considered for SNAT for networks 17 and up.
         </p>
       </li>
 
