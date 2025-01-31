@@ -13329,74 +13329,90 @@ build_lrouter_force_snat_flows_op(struct ovn_port *op,
                                   struct ds *match, struct ds *actions,
                                   struct lflow_ref *lflow_ref)
 {
+    size_t network_id;
     ovs_assert(op->nbrp);
     if (!op->peer || !lrnat_rec->lb_force_snat_router_ip) {
         return;
     }
 
-    if (op->lrp_networks.n_ipv4_addrs) {
+    for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
         ds_clear(match);
         ds_clear(actions);
 
         ds_put_format(match, "inport == %s && ip4.dst == %s",
-                      op->json_key, op->lrp_networks.ipv4_addrs[0].addr_s);
+                      op->json_key, op->lrp_networks.ipv4_addrs[i].addr_s);
         ovn_lflow_add(lflows, op->od, S_ROUTER_IN_UNSNAT, 110,
                       ds_cstr(match), "ct_snat;", lflow_ref);
 
         ds_clear(match);
 
+        /* Since flags.network_id is 16 bits, assign a value of 0 for network
+         * 16 and up. */
+        if (i >= 15) {
+            network_id = 0;
+            VLOG_WARN("Logical router port \"%s\" has over 16 networks are configured, so ",
+                      "network \"%s\" is assigned flags.network_id = 0."); //explain exactly how this will work now
+        } else {
+            network_id = i;
+        }
         /* Higher priority rules to force SNAT with the router port ip.
          * This only takes effect when the packet has already been
          * load balanced once. */
-        ds_put_format(match, "flags.force_snat_for_lb == 1 && ip4 && "
-                      "outport == %s", op->json_key);
+        ds_put_format(match, "flags.force_snat_for_lb == 1 && "
+                      "flags.network_id == %"PRIuSIZE" && ip4 && "
+                      "outport == %s", network_id, op->json_key);
         ds_put_format(actions, "ct_snat(%s);",
-                      op->lrp_networks.ipv4_addrs[0].addr_s);
+                      op->lrp_networks.ipv4_addrs[i].addr_s);
         ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
                       ds_cstr(match), ds_cstr(actions),
                       lflow_ref);
-        if (op->lrp_networks.n_ipv4_addrs > 1) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-            VLOG_WARN_RL(&rl, "Logical router port %s is configured with "
-                              "multiple IPv4 addresses.  Only the first "
-                              "IP [%s] is considered as SNAT for load "
-                              "balancer", op->json_key,
-                              op->lrp_networks.ipv4_addrs[0].addr_s);
-        }
     }
 
     /* op->lrp_networks.ipv6_addrs will always have LLA and that will be
-     * last in the list. So add the flows only if n_ipv6_addrs > 1. */
-    if (op->lrp_networks.n_ipv6_addrs > 1) {
+     * last in the list. So add the flows only if n_ipv6_addrs > 1, and loop
+     * n_ipv6_addrs - 1 times. */
+    for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs - 1; i++) {
         ds_clear(match);
         ds_clear(actions);
 
         ds_put_format(match, "inport == %s && ip6.dst == %s",
-                      op->json_key, op->lrp_networks.ipv6_addrs[0].addr_s);
+                      op->json_key, op->lrp_networks.ipv6_addrs[i].addr_s);
         ovn_lflow_add(lflows, op->od, S_ROUTER_IN_UNSNAT, 110,
                       ds_cstr(match), "ct_snat;", lflow_ref);
-
         ds_clear(match);
 
         /* Higher priority rules to force SNAT with the router port ip.
          * This only takes effect when the packet has already been
          * load balanced once. */
-        ds_put_format(match, "flags.force_snat_for_lb == 1 && ip6 && "
-                      "outport == %s", op->json_key);
+        ds_put_format(match, "flags.force_snat_for_lb == 1 && "
+                      "flags.network_id == %"PRIuSIZE" && ip6 && "
+                      "outport == %s", i < 16 ? i : 0, op->json_key);
         ds_put_format(actions, "ct_snat(%s);",
-                      op->lrp_networks.ipv6_addrs[0].addr_s);
+                      op->lrp_networks.ipv6_addrs[i].addr_s);
         ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 110,
                       ds_cstr(match), ds_cstr(actions),
                       lflow_ref);
-        if (op->lrp_networks.n_ipv6_addrs > 2) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-            VLOG_WARN_RL(&rl, "Logical router port %s is configured with "
-                              "multiple IPv6 addresses.  Only the first "
-                              "IP [%s] is considered as SNAT for load "
-                              "balancer", op->json_key,
-                              op->lrp_networks.ipv6_addrs[0].addr_s);
-        }
     }
+
+    /* This lower-priority flow matches the old behavior for if northd is
+     * upgraded before controller and flags.network_id is not recognized. */
+    ds_clear(match);
+    ds_clear(actions);
+    ds_put_format(match, "flags.force_snat_for_lb == 1 && ip4 && "
+                  "outport == \"%s\"", op->json_key);
+    ds_put_format(actions, "ct_snat(%s);",
+                  op->lrp_networks.ipv4_addrs[0].addr_s);
+    ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 100,
+                  ds_cstr(match), ds_cstr(actions), lflow_ref);
+
+    ds_clear(match);
+    ds_clear(actions);
+    ds_put_format(match, "flags.force_snat_for_lb == 1 && ip6 && "
+                  "outport == \"%s\"", op->json_key);
+    ds_put_format(actions, "ct_snat(%s);",
+                  op->lrp_networks.ipv6_addrs[0].addr_s);
+    ovn_lflow_add(lflows, op->od, S_ROUTER_OUT_SNAT, 100,
+                  ds_cstr(match), ds_cstr(actions), lflow_ref);
 }
 
 static void
@@ -15282,6 +15298,65 @@ build_arp_request_flows_for_lrouter(
                       lflow_ref);
     ovn_lflow_add(lflows, od, S_ROUTER_IN_ARP_REQUEST, 0, "1", "output;",
                   lflow_ref);
+}
+
+static void
+build_lr_force_snat_network_id_flows(
+            struct ovn_datapath *od, struct lflow_table *lflows,
+            struct ds *match, struct ds *actions, struct lflow_ref *lflow_ref)
+{
+    const struct ovn_port *op;
+    size_t network_id;
+    HMAP_FOR_EACH (op, dp_node, &od->ports) {
+        for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+            /* Since flags.network_id is 16 bits, assign a value of 0 for network
+             * 16 and up. */
+            if (i >= 15) {
+                network_id = 0;
+                VLOG_WARN("Logical router port \"%s\" has over 16 networks are configured, so ",
+                          "network \"%s\" is assigned flags.network_id = 0."); //explain exactly how this will work now
+            } else {
+                network_id = i;
+            }
+
+            ds_clear(match);
+            ds_clear(actions);
+
+            ds_put_format(match, "flags.force_snat_for_lb == 1 && "
+                          "outport == %s && " REG_NEXT_HOP_IPV4 " == %s/%d",
+                          op->json_key, op->lrp_networks.ipv4_addrs[i].addr_s,
+                          op->lrp_networks.ipv4_addrs[i].plen);
+
+            ds_put_format(actions, "flags.network_id = %"PRIuSIZE"; ",
+                          network_id);
+            ds_put_format(actions, "next;");
+
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_NETWORK_ID, 110,
+                          ds_cstr(match), ds_cstr(actions),
+                          lflow_ref);
+        }
+
+        /* op->lrp_networks.ipv6_addrs will always have LLA and that will be
+         * last in the list. So add the flows only if n_ipv6_addrs > 1, and
+         * loop n_ipv6_addrs - 1 times. */
+        for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs - 1; i++) {
+            ds_clear(match);
+            ds_clear(actions);
+
+            ds_put_format(match, "flags.force_snat_for_lb == 1 && "
+                          "outport == %s && " REG_NEXT_HOP_IPV6 " == %s/%d",
+                          op->json_key, op->lrp_networks.ipv6_addrs[i].addr_s,
+                          op->lrp_networks.ipv6_addrs[i].plen);
+
+            ds_put_format(actions, "flags.network_id = %"PRIuSIZE"; ", i);
+            ds_put_format(actions, "next;");
+
+            ovn_lflow_add(lflows, op->od, S_ROUTER_IN_NETWORK_ID, 110,
+                          ds_cstr(match), ds_cstr(actions), lflow_ref);
+        }
+    }
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_NETWORK_ID, 0,
+                  "1", "next;", lflow_ref);
 }
 
 /* Logical router egress table DELIVERY: Delivery (priority 100-110).
@@ -17303,26 +17378,28 @@ build_lrouter_nat_defrag_and_lb(
     /* Handle force SNAT options set in the gateway router. */
     if (od->is_gw_router) {
         if (dnat_force_snat_ip) {
-            if (lrnat_rec->dnat_force_snat_addrs.n_ipv4_addrs) {
+            struct lport_addresses dn_addrs = lrnat_rec->dnat_force_snat_addrs;
+            for (size_t i = 0; i < dn_addrs.n_ipv4_addrs; i++) {
                 build_lrouter_force_snat_flows(lflows, od, "4",
-                    lrnat_rec->dnat_force_snat_addrs.ipv4_addrs[0].addr_s,
+                    lrnat_rec->dnat_force_snat_addrs.ipv4_addrs[i].addr_s,
                     "dnat", lflow_ref);
             }
-            if (lrnat_rec->dnat_force_snat_addrs.n_ipv6_addrs) {
+            for (size_t i = 0; i < dn_addrs.n_ipv6_addrs; i++) {
                 build_lrouter_force_snat_flows(lflows, od, "6",
-                    lrnat_rec->dnat_force_snat_addrs.ipv6_addrs[0].addr_s,
+                    lrnat_rec->dnat_force_snat_addrs.ipv6_addrs[i].addr_s,
                     "dnat", lflow_ref);
             }
         }
         if (lb_force_snat_ip) {
-            if (lrnat_rec->lb_force_snat_addrs.n_ipv4_addrs) {
+            struct lport_addresses lb_addrs = lrnat_rec->lb_force_snat_addrs;
+            for (size_t i = 0; i < lb_addrs.n_ipv4_addrs; i++) {
                 build_lrouter_force_snat_flows(lflows, od, "4",
-                    lrnat_rec->lb_force_snat_addrs.ipv4_addrs[0].addr_s, "lb",
+                    lrnat_rec->lb_force_snat_addrs.ipv4_addrs[i].addr_s, "lb",
                     lflow_ref);
             }
-            if (lrnat_rec->lb_force_snat_addrs.n_ipv6_addrs) {
+            for (size_t i = 0; i < lb_addrs.n_ipv6_addrs; i++) {
                 build_lrouter_force_snat_flows(lflows, od, "6",
-                    lrnat_rec->lb_force_snat_addrs.ipv6_addrs[0].addr_s, "lb",
+                    lrnat_rec->lb_force_snat_addrs.ipv6_addrs[i].addr_s, "lb",
                     lflow_ref);
             }
         }
@@ -17682,6 +17759,8 @@ build_lswitch_and_lrouter_iterate_by_lr(struct ovn_datapath *od,
                                         &lsi->actions,
                                         lsi->meter_groups,
                                         NULL);
+    build_lr_force_snat_network_id_flows(od, lsi->lflows, &lsi->match,
+                                         &lsi->actions, NULL);
     build_misc_local_traffic_drop_flows_for_lrouter(od, lsi->lflows, NULL);
 
     build_lr_nat_defrag_and_lb_default_flows(od, lsi->lflows, NULL);
