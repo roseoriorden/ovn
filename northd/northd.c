@@ -4560,6 +4560,8 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             && (vector_len(&od->router_ports) == hmap_count(&od->ports)));
 
     struct ovn_port *op;
+    struct ovs_list exist_virtual_ports;
+    ovs_list_init(&exist_virtual_ports);
     HMAP_FOR_EACH (op, dp_node, &od->ports) {
         op->visited = false;
     }
@@ -4629,6 +4631,8 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 delete_fdb_entries(ni->sbrec_fdb_by_dp_and_port,
                                    od->tunnel_key, old_tunnel_key);
             }
+        } else if (!strcmp(op->nbsp->type, "virtual")) {
+            ovs_list_push_back(&exist_virtual_ports, &op->list);
         }
         op->visited = true;
     }
@@ -4674,6 +4678,55 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
         }
     }
+
+    /*
+     * Update old virtual ports that have newly created VIF as parent port.
+     * This code handles cases where the virtual port was created
+     * before the parent port or when the parent port was recreated.
+     */
+    struct hmapx_node *hmapx_node;
+    struct sset created_ports;
+    sset_init(&created_ports);
+    HMAPX_FOR_EACH (hmapx_node, &trk_lsps->created) {
+        op = hmapx_node->data;
+        sset_add(&created_ports, op->nbsp->name);
+    }
+    struct sset deleted_ports;
+    sset_init(&deleted_ports);
+    HMAPX_FOR_EACH (hmapx_node, &trk_lsps->deleted) {
+        op = hmapx_node->data;
+        sset_add(&deleted_ports, op->nbsp->name);
+    }
+
+    /* For the added port case:
+     * Loop through existing virtual ports.
+     * Check if any of their vparents are newly created ports.
+     *
+     * For the deleted port case:
+     * Loop through existing virtual ports.
+     * Check if any of their vparents are newly deleted ports
+     */
+    LIST_FOR_EACH_POP (op, list, &exist_virtual_ports) {
+        const char *virtual_parents = smap_get_def(&op->nbsp->options, "virtual-parents", "");
+        char *tokstr = xstrdup(virtual_parents);
+        char *save_ptr = NULL;
+        char *vparent;
+        for (vparent = strtok_r(tokstr, ",", &save_ptr); vparent != NULL;
+             vparent = strtok_r(NULL, ",", &save_ptr)) {
+            if (sset_find(&created_ports, vparent)) {
+                add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
+                break;
+            }
+            if (sset_find(&deleted_ports, vparent)) {
+                add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
+                break;
+            }
+        }
+        free(tokstr);
+    }
+
+    sset_destroy(&created_ports);
+    sset_destroy(&deleted_ports);
 
     return true;
 
