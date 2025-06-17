@@ -4990,6 +4990,8 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             && (vector_len(&od->router_ports) == hmap_count(&od->ports)));
 
     struct ovn_port *op;
+    struct ovs_list exist_virtual_ports;
+    ovs_list_init(&exist_virtual_ports);
     HMAP_FOR_EACH (op, dp_node, &od->ports) {
         op->visited = false;
     }
@@ -5059,6 +5061,8 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
                 delete_fdb_entries(ni->sbrec_fdb_by_dp_and_port,
                                    od->tunnel_key, old_tunnel_key);
             }
+        } else if (!strcmp(op->nbsp->type, "virtual")) {
+            ovs_list_push_back(&exist_virtual_ports, &op->list);
         }
         op->visited = true;
     }
@@ -5104,6 +5108,34 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
         }
     }
+
+    /*
+     * Update old virtual ports that have newly created VIF as parent port.
+     * This code handles cases where the virtual port was created
+     * before the parent port or when the parent port was recreated.
+     */
+    struct smap op_smap = SMAP_INITIALIZER(&op_smap);
+
+    LIST_FOR_EACH_POP (op, list, &exist_virtual_ports) {
+        smap_add(&op_smap, op->nbsp->name,
+                 smap_get_def(&op->nbsp->options, "virtual-parents", ""));
+        struct smap_node *node;
+        SMAP_FOR_EACH (node, &op_smap) {
+            char *tokstr = xstrdup(node->value);
+            char *save_ptr = NULL;
+            char *vparent;
+            for (vparent = strtok_r(tokstr, ",", &save_ptr); vparent != NULL;
+                 vparent = strtok_r(NULL, ",", &save_ptr)) {
+                if (vparent) {
+                    add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
+                    break;
+                }
+            }
+            free(tokstr);
+        }
+    }
+
+    smap_destroy(&op_smap);
 
     return true;
 
