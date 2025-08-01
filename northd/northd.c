@@ -4193,6 +4193,15 @@ add_op_to_northd_tracked_ports(struct hmapx *tracked_ovn_ports,
     hmapx_add(tracked_ovn_ports, op);
 }
 
+/*
+static void
+delete_op_from_northd_tracked_ports(struct hmapx *tracked_ovn_ports,
+                               struct ovn_port *op)
+{
+    hmapx_delete(tracked_ovn_ports, op);
+}
+*/
+
 void
 destroy_northd_data_tracked_changes(struct northd_data *nd)
 {
@@ -4670,20 +4679,29 @@ ls_handle_lsp_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
      * This code handles cases where the virtual port was created
      * before the parent port or when the parent port was recreated.
      */
-    struct sset h;
-    sset_init(&h);
+    struct sset created_ports;
+    sset_init(&created_ports);
     HMAP_FOR_EACH (op, dp_node, &od->ports) {
-        sset_add(&h, op->nbsp->name);
+        sset_add(&created_ports, op->nbsp->name);
     }
 
+    // trk_lsps->created needs to be in here somewhere right ?!?!?!?!?
+
     LIST_FOR_EACH_POP (op, list, &exist_virtual_ports) {
-        if (sset_find(&h, op->nbsp->name)) {
-            add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
-            break;
+        char *tokstr = smap_get_def(&op->nbsp->options, "virtual-parents", "");
+        char *save_ptr = NULL;
+        char *vparent;
+        for (vparent = strtok_r(tokstr, ",", &save_ptr); vparent != NULL;
+            vparent = strtok_r(NULL, ",", &save_ptr)) {
+            //op->nbsp->name)) { // if existed virtual and in created ports, then it was created just on this iteration
+            if (sset_find(&created_ports, (const char *)vparent)) {
+                add_op_to_northd_tracked_ports(&trk_lsps->updated, op);
+                break;
+            }
         }
     }
 
-    sset_destroy(&h);
+    sset_destroy(&created_ports);
 
     return true;
 

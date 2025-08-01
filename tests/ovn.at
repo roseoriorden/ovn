@@ -43653,7 +43653,7 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
-AT_SETUP([virtual port - parents port re-create])
+AT_SETUP([qwerty virtual port - parents port re-create])
 AT_KEYWORDS([virtual ports])
 ovn_start
 send_garp() {
@@ -43674,20 +43674,27 @@ check ovs-vsctl -- add-port br-int hv1-vif1 -- \
     options:tx_pcap=hv1/vif1-tx.pcap \
     options:rxq_pcap=hv1/vif1-rx.pcap \
     ofport-request=1
+check ovs-vsctl -- add-port br-int hv1-vif2 -- \
+    set interface hv1-vif2 external-ids:iface-id=sw0-p2 \
+    options:tx_pcap=hv1/vif2-tx.pcap \
+    options:rxq_pcap=hv1/vif2-rx.pcap \
+    ofport-request=2
 
 check ovs-appctl -t ovn-controller vlog/set dbg
 
 check ovn-nbctl ls-add sw0
-check ovn-nbctl lsp-add sw0 sw0-p1
+check ovn-nbctl lsp-add sw0 sw0-p1 -- lsp-add sw0 sw0-p2
 check ovn-nbctl lsp-set-addresses sw0-p1 "50:54:00:00:00:03 10.0.0.3 1000::3"
 check ovn-nbctl lsp-set-port-security sw0-p1 "50:54:00:00:00:03 10.0.0.3 10.0.0.10 1000::3"
+check ovn-nbctl lsp-set-addresses sw0-p2 "50:54:00:00:00:03 10.0.0.4 1000::4"
+check ovn-nbctl lsp-set-port-security sw0-p2 "50:54:00:00:00:03 10.0.0.4 10.0.0.10 1000::4"
 
 check ovn-nbctl lsp-add sw0 sw0-vir
 check ovn-nbctl lsp-set-addresses sw0-vir "50:54:00:00:00:10 10.0.0.10"
 check ovn-nbctl lsp-set-port-security sw0-vir "50:54:00:00:00:10 10.0.0.10"
 check ovn-nbctl lsp-set-type sw0-vir virtual
 check ovn-nbctl set logical_switch_port sw0-vir options:virtual-ip=10.0.0.10
-check ovn-nbctl set logical_switch_port sw0-vir options:virtual-parents=sw0-p1
+check ovn-nbctl set logical_switch_port sw0-vir options:virtual-parents=sw0-p1,sw0-p2
 
 wait_for_ports_up
 check ovn-nbctl --wait=hv sync
