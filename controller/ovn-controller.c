@@ -7244,7 +7244,9 @@ main(int argc, char *argv[])
             if (chassis_id) {
                 chassis = chassis_run(ovnsb_idl_txn, sbrec_chassis_by_name,
                                       sbrec_chassis_private_by_name,
-                                      ovs_table, chassis_id,
+                                      ovs_table,
+                                      sbrec_chassis_table_get(ovnsb_idl_loop.idl),
+                                      chassis_id,
                                       br_int, &transport_zones,
                                       &chassis_private);
             }
