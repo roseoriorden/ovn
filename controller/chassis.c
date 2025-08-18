@@ -708,7 +708,8 @@ chassis_build_encaps(struct ovsdb_idl_txn *ovnsb_idl_txn,
                      const char *chassis_id,
                      const char *encap_csum,
                      size_t *n_encap,
-                     const struct sbrec_chassis_table *chassis_table)
+                     const struct sbrec_chassis_table *chassis_table,
+                     struct ovsdb_idl_index *sbrec_chassis_encaps)
 {
     size_t tunnel_count = 0;
 
@@ -876,7 +877,7 @@ chassis_update(const struct sbrec_chassis *chassis_rec,
                const struct ovs_chassis_cfg *ovs_cfg,
                const struct sbrec_chassis_table *chassis_table,
                const char *chassis_id,
-               const struct sset *transport_zones)
+               const struct sset *transport_zones, struct ovsdb_idl_index *sbrec_chassis_encaps)
 {
     enum chassis_update_status update_status = CHASSIS_NOT_UPDATED;
 
@@ -924,7 +925,8 @@ chassis_update(const struct sbrec_chassis *chassis_rec,
                              &ovs_cfg->encap_type_set,
                              &ovs_cfg->encap_ip_set,
                              ovs_cfg->encap_ip_default, chassis_id,
-                             ovs_cfg->encap_csum, &n_encap, chassis_table);
+                             ovs_cfg->encap_csum, &n_encap, chassis_table,
+                             sbrec_chassis_encaps);
     sbrec_chassis_set_encaps(chassis_rec, encaps, n_encap);
     free(encaps);
 
@@ -984,7 +986,8 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
             const char *chassis_id,
             const struct ovsrec_bridge *br_int,
             const struct sset *transport_zones,
-            const struct sbrec_chassis_private **chassis_private)
+            const struct sbrec_chassis_private **chassis_private,
+            struct ovsdb_idl_index *sbrec_chassis_encaps)
 {
     struct ovs_chassis_cfg ovs_cfg;
 
@@ -1008,7 +1011,7 @@ chassis_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
         enum chassis_update_status update_status =
             chassis_update(chassis_rec, ovnsb_idl_txn, &ovs_cfg,
                            chassis_table, chassis_id,
-                           transport_zones);
+                           transport_zones, sbrec_chassis_encaps);
 
         if (update_status == CHASSIS_NEED_DELETE) {
             sbrec_chassis_delete(chassis_rec);
