@@ -254,15 +254,10 @@ cleanup:
 void
 ovn_fast_hmap_init(struct hmap *hmap, ssize_t mask)
 {
-    size_t i;
-
-    hmap->buckets = xmalloc(sizeof (struct hmap_node *) * (mask + 1));
-    hmap->one = NULL;
+    hmap->buckets = xzalloc(sizeof *hmap->buckets * (mask + 1));
     hmap->mask = mask;
+    memset(&hmap->one, 0, sizeof(hmap->one));
     hmap->n = 0;
-    for (i = 0; i <= hmap->mask; i++) {
-        hmap->buckets[i] = NULL;
-    }
 }
 
 /* Initializes 'hmap' as an empty hash table of size X.
@@ -274,7 +269,7 @@ void
 ovn_fast_hmap_size_for(struct hmap *hmap, int size)
 {
     size_t mask;
-    mask = size / 2;
+    mask = size / 6;
     mask |= mask >> 1;
     mask |= mask >> 2;
     mask |= mask >> 4;
@@ -384,16 +379,14 @@ ovn_fast_hmap_merge(struct hmap *dest, struct hmap *inc)
     }
 
     for (i = 0; i <= dest->mask; i++) {
-        struct hmap_node **dest_bucket = &dest->buckets[i];
-        struct hmap_node **inc_bucket = &inc->buckets[i];
-        if (*inc_bucket != NULL) {
-            struct hmap_node *last_node = *inc_bucket;
-            while (last_node->next != NULL) {
-                last_node = last_node->next;
+        struct bucket *inc_bucket = &inc->buckets[i];
+        if (inc_bucket != NULL) {
+            struct hmap_node *node = hmap_first_with_hash(inc, i);
+            while (node) {
+                hmap_insert_fast(dest, node, i);
+                hmap_remove(inc, node);
+                node = hmap_next_with_hash(inc, node);
             }
-            last_node->next = *dest_bucket;
-            *dest_bucket = *inc_bucket;
-            *inc_bucket = NULL;
         }
     }
     dest->n += inc->n;
