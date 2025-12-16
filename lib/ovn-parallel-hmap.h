@@ -59,10 +59,10 @@ extern "C" {
  */
 
 #define HMAP_FOR_EACH_IN_PARALLEL(NODE, MEMBER, JOBID, HMAP)                \
-   for (INIT_MULTIVAR(NODE, MEMBER, hmap_first_in_bucket_num(HMAP, JOBID),  \
+   for (INIT_MULTIVAR(NODE, MEMBER, hmap_first_in_bucket(HMAP, JOBID),  \
                       struct hmap_node);                                    \
         CONDITION_MULTIVAR(NODE, MEMBER, ITER_VAR(NODE) != NULL);           \
-        UPDATE_MULTIVAR(NODE, hmap_next_in_bucket(ITER_VAR(NODE))))
+        UPDATE_MULTIVAR(NODE, hmap_next_in_bucket(HMAP, ITER_VAR(NODE))))
 
 /* We do not have a SAFE version of the macro, because the hash size is not
  * atomic and hash removal operations would need to be wrapped with
@@ -152,53 +152,6 @@ void ovn_run_pool_callback(struct worker_pool *pool, void *fin_result,
                            void (*helper_func)(struct worker_pool *pool,
                            void *fin_result, void *result_frags,
                            size_t index));
-
-
-/* Returns the first node in 'hmap' in the bucket in which the given 'hash'
- * would land, or a null pointer if that bucket is empty. */
-
-static inline struct hmap_node *
-hmap_first_in_bucket_num(const struct hmap *hmap, size_t num)
-{
-    return hmap->buckets[num];
-}
-
-static inline struct hmap_node *
-parallel_hmap_next__(const struct hmap *hmap, size_t start, size_t pool_size)
-{
-    size_t i;
-    for (i = start; i <= hmap->mask; i+= pool_size) {
-        struct hmap_node *node = hmap->buckets[i];
-        if (node) {
-            return node;
-        }
-    }
-    return NULL;
-}
-
-/* Returns the first node in 'hmap', as expected by thread with job_id
- * for parallel processing in arbitrary order, or a null pointer if
- * the slice of 'hmap' for that job_id is empty. */
-static inline struct hmap_node *
-parallel_hmap_first(const struct hmap *hmap, size_t job_id, size_t pool_size)
-{
-    return parallel_hmap_next__(hmap, job_id, pool_size);
-}
-
-/* Returns the next node in the slice of 'hmap' following 'node',
- * in arbitrary order, or a * null pointer if 'node' is the last node in
- * the 'hmap' slice.
- *
- */
-static inline struct hmap_node *
-parallel_hmap_next(const struct hmap *hmap,
-                   const struct hmap_node *node, ssize_t pool_size)
-{
-    return (node->next
-            ? node->next
-            : parallel_hmap_next__(hmap,
-                (node->hash & hmap->mask) + pool_size, pool_size));
-}
 
 static inline void post_completed_work(struct worker_control *control)
 {
