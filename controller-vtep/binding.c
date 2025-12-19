@@ -60,7 +60,7 @@ check_pb_conflict(struct shash *ls_to_pb,
         return true;
     }
 
-    shash_add(ls_to_pb, vtep_lswitch, port_binding_rec);
+    shash_replace(ls_to_pb, vtep_lswitch, port_binding_rec);
     return false;
 }
 
