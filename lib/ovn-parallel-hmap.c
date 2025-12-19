@@ -380,13 +380,13 @@ ovn_fast_hmap_merge(struct hmap *dest, struct hmap *inc)
 
     for (i = 0; i <= dest->mask; i++) {
         struct bucket *inc_bucket = &inc->buckets[i];
+        struct bucket *dest_bucket = &dest->buckets[i];
         if (inc_bucket != NULL) {
-            struct hmap_node *node = hmap_first_with_hash(inc, i);
-            while (node) {
-                hmap_insert_fast(dest, node, i);
-                hmap_remove(inc, node);
-                node = hmap_next_with_hash(inc, node);
+            while ((dest_bucket->bitfield >> 7 == 1)) {
+                dest_bucket = dest_bucket->nodes[6];
             }
+            dest_bucket->nodes[6] = inc_bucket;
+            dest_bucket->bitfield &= (1 << 7);
         }
     }
     dest->n += inc->n;
