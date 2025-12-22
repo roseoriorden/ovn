@@ -40,14 +40,19 @@ VLOG_DEFINE_THIS_MODULE(binding);
  * 'port_binding_rec''s chassis column.  Otherwise, updates 'ls_to_pb'
  * and returns false. */
 static bool
-check_pb_conflict(struct shash *ls_to_pb,
+check_pb_conflict(struct shash *vls, struct shash *ls_to_pb,
                   const struct sbrec_port_binding *port_binding_rec,
                   const char *chassis_name,
                   const char *vtep_lswitch)
 {
     const struct sbrec_port_binding *pb_conflict =
         shash_find_data(ls_to_pb, vtep_lswitch);
+    VLOG_INFO("key: %s, found? %s", vtep_lswitch, pb_conflict ? "yes" : "no");
 
+    struct shash_node *node;
+    SHASH_FOR_EACH(node, vls) {
+        VLOG_INFO("Inside checkpb, found %s", node->name);
+    }
     if (pb_conflict) {
         VLOG_WARN("logical switch (%s), on vtep gateway chassis "
                   "(%s) has already been associated with logical "
@@ -61,6 +66,7 @@ check_pb_conflict(struct shash *ls_to_pb,
     }
 
     shash_replace(ls_to_pb, vtep_lswitch, port_binding_rec);
+    VLOG_INFO("Adding key: %s, rec: %p", vtep_lswitch, port_binding_rec);
     return false;
 }
 
@@ -122,6 +128,7 @@ update_pb_chassis(const struct sbrec_port_binding *port_binding_rec,
 void
 binding_run(struct controller_vtep_ctx *ctx)
 {
+    VLOG_INFO("NEW ITERATION");
     if (!ctx->ovnsb_idl_txn) {
         return;
     }
@@ -151,6 +158,7 @@ binding_run(struct controller_vtep_ctx *ctx)
     };
     struct shash ps_map = SHASH_INITIALIZER(&ps_map);
     const struct vteprec_physical_switch *pswitch;
+    struct shash vls = SHASH_INITIALIZER(&vls);
     VTEPREC_PHYSICAL_SWITCH_FOR_EACH (pswitch, ctx->vtep_idl) {
         const struct sbrec_chassis *chassis_rec
             = get_chassis_by_name(ctx->ovnsb_idl, pswitch->name);
@@ -162,7 +170,8 @@ binding_run(struct controller_vtep_ctx *ctx)
         ps->chassis_rec = chassis_rec;
         shash_init(&ps->ls_to_pb);
         for (i = 0; i < chassis_rec->n_vtep_logical_switches; i++) {
-            shash_add(&ps->ls_to_pb, chassis_rec->vtep_logical_switches[i],
+            VLOG_INFO("Adding %s", chassis_rec->vtep_logical_switches[i]);
+            shash_add(&vls, chassis_rec->vtep_logical_switches[i],
                       NULL);
         }
         shash_add(&ps_map, chassis_rec->name, ps);
@@ -183,12 +192,13 @@ binding_run(struct controller_vtep_ctx *ctx)
         struct ps *ps
             = vtep_pswitch ? shash_find_data(&ps_map, vtep_pswitch) : NULL;
         bool found_ls
-            = ps && vtep_lswitch && shash_find(&ps->ls_to_pb, vtep_lswitch);
+            = ps && vtep_lswitch && shash_find(&vls, vtep_lswitch);
 
         if (!strcmp(type, "vtep") && found_ls) {
             bool pb_conflict, db_conflict;
 
-            pb_conflict = check_pb_conflict(&ps->ls_to_pb, port_binding_rec,
+            VLOG_INFO("main: calling conflict with %s and %s", ps->chassis_rec->name, vtep_lswitch);
+            pb_conflict = check_pb_conflict(&vls, &ps->ls_to_pb, port_binding_rec,
                                             ps->chassis_rec->name,
                                             vtep_lswitch);
             db_conflict = check_db_conflict(&ls_to_db, port_binding_rec,
@@ -206,6 +216,7 @@ binding_run(struct controller_vtep_ctx *ctx)
             update_pb_chassis(port_binding_rec, NULL);
         }
     }
+    shash_destroy(&vls);
 
     struct shash_node *iter;
     SHASH_FOR_EACH_SAFE (iter, &ps_map) {
