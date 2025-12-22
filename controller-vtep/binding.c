@@ -98,7 +98,7 @@ check_db_conflict(struct shash *ls_to_db,
         return true;
     }
 
-    shash_replace(ls_to_db, vtep_lswitch, port_binding_rec->datapath);
+    shash_add(ls_to_db, vtep_lswitch, port_binding_rec->datapath);
     return false;
 }
 
@@ -149,6 +149,7 @@ binding_run(struct controller_vtep_ctx *ctx)
      *
      */
     struct shash ls_to_db = SHASH_INITIALIZER(&ls_to_db);
+    struct sset vtep_lswitches = SSET_INITIALIZER(&vtep_lswitches);
 
     /* Stores the 'chassis' and the 'ls_to_pb' map related to
      * a vtep physcial switch. */
@@ -170,7 +171,6 @@ binding_run(struct controller_vtep_ctx *ctx)
         ps->chassis_rec = chassis_rec;
         shash_init(&ps->ls_to_pb);
         for (i = 0; i < chassis_rec->n_vtep_logical_switches; i++) {
-            VLOG_INFO("Adding %s", chassis_rec->vtep_logical_switches[i]);
             sset_add(&vls, chassis_rec->vtep_logical_switches[i]);
         }
         shash_add(&ps_map, chassis_rec->name, ps);
@@ -191,7 +191,7 @@ binding_run(struct controller_vtep_ctx *ctx)
         struct ps *ps
             = vtep_pswitch ? shash_find_data(&ps_map, vtep_pswitch) : NULL;
         bool found_ls
-            = ps && vtep_lswitch && sset_find(&vls, vtep_lswitch);
+            = ps && vtep_lswitch && sset_find(&vtep_lswitches, vtep_lswitch);
 
         if (!strcmp(type, "vtep") && found_ls) {
             bool pb_conflict, db_conflict;
@@ -215,7 +215,7 @@ binding_run(struct controller_vtep_ctx *ctx)
             update_pb_chassis(port_binding_rec, NULL);
         }
     }
-    sset_destroy(&vls);
+    sset_destroy(&vtep_lswitches);
 
     struct shash_node *iter;
     SHASH_FOR_EACH_SAFE (iter, &ps_map) {
