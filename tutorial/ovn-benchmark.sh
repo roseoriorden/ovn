@@ -88,7 +88,7 @@ if [ "$DEBUG" = true ]; then
 fi
 
 for pn in ${PROCESS_NAME[@]}; do
-    PROCESS_PIDS+=($(pgrep -f "$pn" | head -n 1))
+    PROCESS_PIDS+=($(pgrep -x "$pn" | head -n 1))
 done
 
 for pid in ${PROCESS_PIDS[@]}; do
