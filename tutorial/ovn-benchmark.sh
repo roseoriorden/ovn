@@ -119,8 +119,8 @@ while true; do
         # Get the Resident Set Size (RSS) memory in KB.
         CURRENT_MEM[$i]=$(ps -p $pid -o rss= 2>/dev/null)
 
-        # If the process died, break.
-        if [ -z "${CURRENT_MEM[$i]}" ]; then break; fi
+        # If the process died, break out of both loops.
+        if [ -z "${CURRENT_MEM[$i]}" ]; then break 2; fi
 
         PEAK_MEM[$i]=$(cat peak_mem_$pn.txt)
 
