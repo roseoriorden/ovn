@@ -63,7 +63,7 @@ def create_address_sets(idl, n):
         die(f'Failed to create address sets ({txn.get_error()})')
 
 
-def create_port_groups(idl, n):
+def create_port_groups(idl):
     """Create port groups for security group implementation."""
     vlog.info('Creating port groups')
     txn = ovs.db.idl.Transaction(idl)
@@ -467,7 +467,7 @@ def create_topology(idl, n, ports_per_switch):
         die(f'Failed to create topology ({txn.get_error()})')
 
 
-def assign_ports_to_groups(idl, n, ports_per_switch):
+def assign_ports_to_groups(idl):
     """Assign logical switch ports to port groups based on tier."""
     vlog.info('Assigning ports to port groups')
 
@@ -580,8 +580,8 @@ def run(remote, n, n_vips, n_backends, ports_per_switch):
                for row in idl.tables['Logical_Router'].rows.values()}
 
     create_address_sets(idl, n)
-    create_port_groups(idl, n)
-    assign_ports_to_groups(idl, n, ports_per_switch)
+    create_port_groups(idl)
+    assign_ports_to_groups(idl)
     create_dhcp_options(idl, n)
     create_dns_records(idl, n, switches)
     add_nat_rules(idl, n, routers)
@@ -594,7 +594,7 @@ def run(remote, n, n_vips, n_backends, ports_per_switch):
     add_explicit_lbs(idl, n, n_vips, n_backends, routers, switches)
 
 
-def main(argv):
+def main():
     parser = argparse.ArgumentParser(
         description='Create a complex OVN topology with various features'
     )
@@ -653,7 +653,7 @@ def main(argv):
 
 if __name__ == '__main__':
     try:
-        main(sys.argv)
+        main()
     except error.Error as e:
         sys.stderr.write(f'{e}\n')
         sys.exit(1)
