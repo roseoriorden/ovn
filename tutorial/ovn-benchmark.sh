@@ -55,7 +55,7 @@ while [[ $# -gt 0 ]]; do
                 NODES="$1"
             else
                 # Normalize process names: accept both "northd" and
-                # "ovn-northd"
+                # "ovn-northd".
                 case "$1" in
                     northd)
                         PROCESS_NAME+=("ovn-northd")
@@ -73,10 +73,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Apply default if not set by user
+# Apply default if not set by user.
 NODES=${NODES:-$DEFAULT_NODES}
 
-# Track both processes if not specified
+# Track both processes if not specified.
 if [ ${#PROCESS_NAME[@]} -eq 0 ]; then
     PROCESS_NAME=("ovn-controller" "ovn-northd")
 fi
@@ -105,21 +105,21 @@ if [ "$DEBUG" = true ]; then
     done
 fi
 
-# Create a temporary file to store the highest memory value we see
+# Create a temporary file to store the highest memory value we see.
 for pn in "${PROCESS_NAME[@]}"; do
     echo 0 > peak_mem_$pn.txt
 done
 
-# Start the background "Watcher" loop
+# Start the background "Watcher" loop.
 while true; do
     for i in "${!PROCESS_NAME[@]}"; do
         pn="${PROCESS_NAME[$i]}"
         pid="${PROCESS_PIDS[$i]}"
 
-        # Get the Resident Set Size (RSS) memory in KB
+        # Get the Resident Set Size (RSS) memory in KB.
         CURRENT_MEM[$i]=$(ps -p $pid -o rss= 2>/dev/null)
 
-        # If the process died, break
+        # If the process died, break.
         if [ -z "${CURRENT_MEM[$i]}" ]; then break; fi
 
         PEAK_MEM[$i]=$(cat peak_mem_$pn.txt)
@@ -142,7 +142,7 @@ else
     DEBUG_FLAG=""
 fi
 
-# Load database from file or generate with Python script
+# Load database from file or generate with Python script.
 if [ -n "$FILE_NAME" ]; then
     echo "Loading database from file: $FILE_NAME"
     if [ ! -f "$FILE_NAME" ]; then
