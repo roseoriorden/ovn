@@ -11,6 +11,20 @@ PEAK_MEM=()
 FINAL_PEAK_KB=()
 FINAL_PEAK_MB=()
 DEBUG=false
+WATCHER_PID=""
+
+# Cleanup function to kill background watcher and remove temp files.
+cleanup() {
+    if [ -n "$WATCHER_PID" ]; then
+        kill $WATCHER_PID 2>/dev/null
+    fi
+    for pn in "${PROCESS_NAME[@]}"; do
+        rm -f peak_mem_$pn.txt
+    done
+}
+
+# Register cleanup to run on script exit.
+trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -147,7 +161,6 @@ if [ -n "$FILE_NAME" ]; then
     echo "Loading database from file: $FILE_NAME"
     if [ ! -f "$FILE_NAME" ]; then
         echo "Error: File '$FILE_NAME' not found"
-        kill $WATCHER_PID 2>/dev/null
         exit 1
     fi
     ovsdb-client restore unix:$PWD/sandbox/nb1.ovsdb < "$FILE_NAME"
@@ -157,7 +170,6 @@ else
         -r unix:$PWD/sandbox/nb1.ovsdb $DEBUG_FLAG
     if [ $? -ne 0 ]; then
         echo "Error: Failed to generate database"
-        kill $WATCHER_PID 2>/dev/null
         exit 1
     fi
 fi
@@ -172,6 +184,7 @@ ovs-appctl -t $PWD/sandbox/sb1 ovsdb-server/compact
 END_TIME=$(date +%s%2N)
 
 kill $WATCHER_PID 2>/dev/null
+wait $WATCHER_PID 2>/dev/null
 
 ELAPSED_TIME=$((END_TIME - START_TIME))
 SECONDS=$((ELAPSED_TIME / 100))
@@ -195,6 +208,4 @@ done
 echo "========================="
 echo ""
 
-for pn in "${PROCESS_NAME[@]}"; do
-    rm peak_mem_$pn.txt
-done
+# Cleanup handled by trap on EXIT.
