@@ -38,6 +38,11 @@ def die(msg):
     sys.exit(1)
 
 
+def ip_node(i):
+    """Convert node index to two IP octets, supporting up to 65535 nodes."""
+    return f'{i >> 8}.{i & 0xff}'
+
+
 def create_address_sets(idl, n):
     """Create address sets for security groups."""
     vlog.info('Creating address sets')
@@ -45,15 +50,15 @@ def create_address_sets(idl, n):
 
     web_as = txn.insert(idl.tables['Address_Set'])
     web_as.name = 'web_servers'
-    web_as.addresses = [f'10.{i}.1.10' for i in range(n)]
+    web_as.addresses = [f'10.{ip_node(i)}.10' for i in range(n)]
 
     db_as = txn.insert(idl.tables['Address_Set'])
     db_as.name = 'db_servers'
-    db_as.addresses = [f'10.{i}.1.20' for i in range(n)]
+    db_as.addresses = [f'10.{ip_node(i)}.20' for i in range(n)]
 
     app_as = txn.insert(idl.tables['Address_Set'])
     app_as.name = 'app_servers'
-    app_as.addresses = [f'10.{i}.1.30' for i in range(n)]
+    app_as.addresses = [f'10.{ip_node(i)}.30' for i in range(n)]
 
     trusted_as = txn.insert(idl.tables['Address_Set'])
     trusted_as.name = 'trusted_networks'
@@ -87,12 +92,12 @@ def create_dhcp_options(idl, n):
         vlog.info(f'Creating DHCP options for node {i}')
         txn = ovs.db.idl.Transaction(idl)
         dhcp_opts = txn.insert(idl.tables['DHCP_Options'])
-        dhcp_opts.cidr = f'10.{i}.1.0/24'
-        dhcp_opts.setkey('options', 'server_id', f'10.{i}.1.1')
+        dhcp_opts.cidr = f'10.{ip_node(i)}.0/24'
+        dhcp_opts.setkey('options', 'server_id', f'10.{ip_node(i)}.1')
         dhcp_opts.setkey('options', 'server_mac', '00:00:00:00:00:01')
         dhcp_opts.setkey('options', 'lease_time', '3600')
-        dhcp_opts.setkey('options', 'router', f'10.{i}.1.1')
-        dhcp_opts.setkey('options', 'dns_server', f'10.{i}.1.2')
+        dhcp_opts.setkey('options', 'router', f'10.{ip_node(i)}.1')
+        dhcp_opts.setkey('options', 'dns_server', f'10.{ip_node(i)}.2')
         dhcp_opts.setkey('options', 'domain_name', '"example.com"')
         dhcp_opts.setkey('options', 'mtu', '1500')
         dhcp_opts.setkey('external_ids', 'subnet', f'ls-{i}')
@@ -237,7 +242,7 @@ def add_acls_to_switch(idl, switch_name, node_id, switches):
         acl_deny_spoofing = txn.insert(idl.tables['ACL'])
         acl_deny_spoofing.priority = 2500
         acl_deny_spoofing.direction = 'from-lport'
-        acl_deny_spoofing.match = f'ip4.src != 10.{node_id}.1.0/24'
+        acl_deny_spoofing.match = f'ip4.src != 10.{ip_node(node_id)}.0/24'
         acl_deny_spoofing.action = 'drop'
         acl_deny_spoofing.setkey('external_ids', 'description', 'Anti-spoofing')
         ls.addvalue('acls', acl_deny_spoofing.uuid)
@@ -259,9 +264,9 @@ def create_dns_records(idl, n, switches):
         vlog.info(f'Creating DNS records for node {i}')
         txn = ovs.db.idl.Transaction(idl)
         dns = txn.insert(idl.tables['DNS'])
-        dns.setkey('records', f'web-{i}.example.com', f'10.{i}.1.10')
-        dns.setkey('records', f'app-{i}.example.com', f'10.{i}.1.30')
-        dns.setkey('records', f'db-{i}.example.com', f'10.{i}.1.20')
+        dns.setkey('records', f'web-{i}.example.com', f'10.{ip_node(i)}.10')
+        dns.setkey('records', f'app-{i}.example.com', f'10.{ip_node(i)}.30')
+        dns.setkey('records', f'db-{i}.example.com', f'10.{ip_node(i)}.20')
         dns.setkey('external_ids', 'zone', f'zone-{i}')
 
         ls = switches.get(f'ls-{i}')
@@ -286,21 +291,21 @@ def add_nat_rules(idl, n, routers):
         if lr:
             nat_snat = txn.insert(idl.tables['NAT'])
             nat_snat.type = 'snat'
-            nat_snat.logical_ip = f'10.{i}.1.0/24'
-            nat_snat.external_ip = f'192.168.{i}.1'
+            nat_snat.logical_ip = f'10.{ip_node(i)}.0/24'
+            nat_snat.external_ip = f'192.{ip_node(i)}.1'
             lr.addvalue('nat', nat_snat.uuid)
 
             nat_dnat = txn.insert(idl.tables['NAT'])
             nat_dnat.type = 'dnat'
-            nat_dnat.logical_ip = f'10.{i}.1.10'
-            nat_dnat.external_ip = f'192.168.{i}.10'
+            nat_dnat.logical_ip = f'10.{ip_node(i)}.10'
+            nat_dnat.external_ip = f'192.{ip_node(i)}.10'
             nat_dnat.setkey('external_ids', 'service', 'web')
             lr.addvalue('nat', nat_dnat.uuid)
 
             nat_dnat_and_snat = txn.insert(idl.tables['NAT'])
             nat_dnat_and_snat.type = 'dnat_and_snat'
-            nat_dnat_and_snat.logical_ip = f'10.{i}.1.20'
-            nat_dnat_and_snat.external_ip = f'192.168.{i}.20'
+            nat_dnat_and_snat.logical_ip = f'10.{ip_node(i)}.20'
+            nat_dnat_and_snat.external_ip = f'192.{ip_node(i)}.20'
             nat_dnat_and_snat.setkey('external_ids', 'service', 'db')
             lr.addvalue('nat', nat_dnat_and_snat.uuid)
 
@@ -325,8 +330,8 @@ def add_static_routes(idl, n, routers):
 
             route_specific = txn.insert(
                 idl.tables['Logical_Router_Static_Route'])
-            route_specific.ip_prefix = f'172.16.{i}.0/24'
-            route_specific.nexthop = f'10.{i}.1.254'
+            route_specific.ip_prefix = f'172.{ip_node(i)}.0/24'
+            route_specific.nexthop = f'10.{ip_node(i)}.254'
             route_specific.setkey('external_ids', 'type', 'specific')
             lr.addvalue('static_routes', route_specific.uuid)
 
@@ -351,9 +356,9 @@ def add_routing_policies(idl, n, routers):
         if lr:
             policy_reroute = txn.insert(idl.tables['Logical_Router_Policy'])
             policy_reroute.priority = 100
-            policy_reroute.match = f'ip4.src == 10.{i}.1.0/24'
+            policy_reroute.match = f'ip4.src == 10.{ip_node(i)}.0/24'
             policy_reroute.action = 'reroute'
-            policy_reroute.nexthops = [f'10.{(i + 1) % n}.1.1']
+            policy_reroute.nexthops = [f'10.{ip_node((i + 1) % n)}.1']
             policy_reroute.setkey('external_ids', 'policy',
                                   'traffic-engineering')
             lr.addvalue('policies', policy_reroute.uuid)
@@ -420,13 +425,13 @@ def create_topology(idl, n, ports_per_switch):
         s = txn.insert(idl.tables['Logical_Switch'])
         s.name = f'ls-{i}'
         s.addvalue('load_balancer_group', lbg.uuid)
-        s.setkey('other_config', 'subnet', f'10.{i}.1.0/24')
+        s.setkey('other_config', 'subnet', f'10.{ip_node(i)}.0/24')
         s.setkey('other_config', 'mcast_snoop', 'true')
 
         cluster2s = txn.insert(idl.tables['Logical_Router_Port'])
         cluster2s.name = f'c2s-{i}'
         cluster2s.mac = '00:00:00:00:00:01'
-        cluster2s.networks = [f'10.{i}.1.1/24']
+        cluster2s.networks = [f'10.{ip_node(i)}.1/24']
         cluster_rtr.addvalue('ports', cluster2s.uuid)
 
         gw_chassis = txn.insert(idl.tables['Gateway_Chassis'])
@@ -446,10 +451,11 @@ def create_topology(idl, n, ports_per_switch):
             lsp = txn.insert(idl.tables['Logical_Switch_Port'])
             lsp.name = f'lsp-{i}-{p}'
             mac_byte = (p + 10) % 256
-            lsp.addresses = [
-                f'00:00:00:{i:02x}:{p:02x}:{mac_byte:02x} 10.{i}.1.{10 + p}']
-            lsp.port_security = [
-                f'00:00:00:{i:02x}:{p:02x}:{mac_byte:02x} 10.{i}.1.{10 + p}']
+            mac = (f'00:00:{i >> 8:02x}:{i & 0xff:02x}'
+                   f':{p:02x}:{mac_byte:02x}')
+            ip = f'10.{ip_node(i)}.{10 + p}'
+            lsp.addresses = [f'{mac} {ip}']
+            lsp.port_security = [f'{mac} {ip}']
             lsp.setkey('external_ids', 'vm-id', f'vm-{i}-{p}')
 
             # Assign ports to tiers (web/app/db) to model a typical 3-tier
@@ -528,7 +534,8 @@ def add_explicit_lbs(idl, n, n_vips, n_backends, routers, switches):
 
             lb = txn.insert(idl.tables['Load_Balancer'])
             lb.name = f'lb-{j}-{i}'
-            lb.setkey('vips', f'42.42.42.{i}:{port}', f'{",".join(backends)}')
+            lb.setkey('vips', f'42.42.{ip_node(i)}:{port}',
+                      f'{",".join(backends)}')
             lb.protocol = 'tcp'
             lr.addvalue('load_balancer', lb.uuid)
             ls.addvalue('load_balancer', lb.uuid)
