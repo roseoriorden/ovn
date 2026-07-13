@@ -59,9 +59,9 @@ Verification
 check COMMAND...
 ++++++++++++++++
 
-Function to run COMMAND and check that it succeeds without any output. Also
-logs the COMMAND. Note that most ``ovn-nbctl`` and ``ovn-sbctl`` must be run
-withing ``check`` so that the return status is checked.
+Function to run COMMAND and check that it succeeds (returns exit code 0). Also
+logs the COMMAND to standard output. Note that most ``ovn-nbctl`` and ``ovn-sbctl``
+commands must be run within ``check`` so that the return status is checked.
 
 OVN_CHECK_PACKETS([PCAP], [EXPECTED])
 +++++++++++++++++++++++++++++++++++++
@@ -102,15 +102,15 @@ uuid as output. It also fails if the output is empty.
 Daemon/Sandbox Management
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-ovn_start [--backup-northd=none|paused] [AZ]
-++++++++++++++++++++++++++++++++++++++++++++
+ovn_start [--backup-northd[=paused]] [--use-tcp-to-sb] [AZ]
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 Creates and initializes ovn-sb and ovn-nb databases and starts their
 ovsdb-server instance, sets appropriate environment variables so that ovn-sbctl
 and ovn-nbctl use them by default, and starts ovn-northd running against them.
 
 Normally this starts only an active northd and no backup northd. The following
-options are accepted to adjust that:
+options are accepted:
 
 ``--backup-northd``         Start a backup northd.
 ``--backup-northd=paused``  Start the backup northd in the paused state.
@@ -187,7 +187,7 @@ OVN_POPULATE_ARP()
 ++++++++++++++++++
 
 Macro to pre-populate the ARP tables of all of the OVN instances that have been
-started with ```ovn_attach()``. That means that packets sent from one
+started with ``ovn_attach()``. That means that packets sent from one
 hypervisor to another never get dropped or delayed by ARP resolution, which
 makes testing easier.
 
@@ -335,7 +335,8 @@ STDOUT on stdout, and prints STDERR on stderr. If this doesn't happen within a
 reasonable time limit, then the test fails.
 
 There is an ``OVS_WAIT_FOR_OUTPUT_UNQUOTED`` version of this macro that expands
-shell ``$variables``, ``$(command)``, and so on.  The plain version does not
+shell ``$variables``, ``$(command)``, and so on in the STDOUT and STDERR
+arguments.  The plain version treats STDOUT and STDERR as literal text.
 
 OVS_WAIT_UNTIL(COMMAND[, IF-FAILED])
 ++++++++++++++++++++++++++++++++++++
