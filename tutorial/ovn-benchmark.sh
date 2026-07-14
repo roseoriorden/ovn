@@ -11,6 +11,7 @@ PEAK_MEM=()
 FINAL_PEAK_KB=()
 FINAL_PEAK_MB=()
 DEBUG=false
+BATCH_SIZE=""
 WATCHER_PID=""
 
 # Cleanup function to kill background watcher and remove temp files.
@@ -39,10 +40,12 @@ while [[ $# -gt 0 ]]; do
             echo "                (default: both)"
             echo ""
             echo "Options:"
-            echo "  -f, --file FILE    Load NB database from file" \
-                 "instead of generating"
-            echo "  -d, --debug        Enable debug output"
-            echo "  -h, --help         Show this help message"
+            echo "  -f, --file FILE       Load NB database from" \
+                 "file instead of generating"
+            echo "  -b, --batch-size N    Nodes per chassis" \
+                 "(default: NODES/10)"
+            echo "  -d, --debug           Enable debug output"
+            echo "  -h, --help            Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0                      # 200 nodes, track both processes"
@@ -50,7 +53,13 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 50 ovn-northd        # 50 nodes, track only ovn-northd"
             echo "  $0 --debug 20           # 20 nodes with debug output"
             echo "  $0 --file ovnnb_db.db   # Load from file"
+            echo "  $0 50 -b 10             # 50 nodes with 10 nodes per" \
+                 "chassis"
             exit 0
+            ;;
+        -B|--batch-size)
+            BATCH_SIZE="$2"
+            shift 2
             ;;
         -d|--debug)
             DEBUG=true
@@ -87,8 +96,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Apply default if not set by user.
+# Apply defaults if not set by user.
 NODES=${NODES:-$DEFAULT_NODES}
+
+if [ -z "$BATCH_SIZE" ]; then
+    BATCH_SIZE=$((NODES / 10))
+fi
+if [ "$BATCH_SIZE" -lt 1 ]; then
+    BATCH_SIZE=1
+fi
 
 # Track both processes if not specified.
 if [ ${#PROCESS_NAME[@]} -eq 0 ]; then
@@ -97,6 +113,7 @@ fi
 
 if [ "$DEBUG" = true ]; then
     echo "Nodes:       $NODES"
+    echo "Batch size:  $BATCH_SIZE"
     echo "Processes:   ${PROCESS_NAME[*]}"
     echo "File:        ${FILE_NAME:-None}"
 fi
@@ -166,7 +183,7 @@ if [ -n "$FILE_NAME" ]; then
     ovsdb-client restore unix:$PWD/sandbox/nb1.ovsdb < "$FILE_NAME"
 else
     echo "Generating database with Python script"
-    python ovn-benchmark.py -n $NODES \
+    python ovn-benchmark.py -n $NODES -B $BATCH_SIZE \
         -r unix:$PWD/sandbox/nb1.ovsdb $DEBUG_FLAG
     if [ $? -ne 0 ]; then
         echo "Error: Failed to generate database"
@@ -174,9 +191,15 @@ else
     fi
 fi
 
-# Bind a port from the first LS locally.
-ovs-vsctl add-port br-int lsp-1 -- \
-    set interface lsp-1 external_ids:iface-id=lsp-1
+# Bind the first port of each switch assigned to chassis-0.
+for i in $(seq 0 $((BATCH_SIZE - 1))); do
+    ovs-vsctl add-port br-int lsp-${i}-0 -- \
+        set interface lsp-${i}-0 \
+        external_ids:iface-id=lsp-${i}-0
+done
+
+# Wait for ovn-controller to claim ports and finish processing.
+ovn-nbctl --wait=hv sync
 
 ovs-appctl -t $PWD/sandbox/nb1 ovsdb-server/compact
 ovs-appctl -t $PWD/sandbox/sb1 ovsdb-server/compact

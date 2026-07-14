@@ -2,18 +2,42 @@
 """OVN memory regression testing tool.
 
 Creates a broad OVN topology to detect memory regressions between commits.
-Designed to be run via ovn-benchmark.sh. (Run ./ovn-benchmark.sh --help to see
-usage).
+Designed to be run via ovn-benchmark.sh. (Run ./ovn-benchmark.sh --help
+to see usage).
 
-Topology created (for n nodes):
-  - n gateway routers with NAT, static routes, routing policies
-  - n logical switches with configurable ports per switch
-  - Security: Address sets, port groups, ACLs, port security
+Topology (simulates the default ovn-kubernetes topology):
+
+         lsp-0-*            lsp-1-*          (Workload ports)
+            |                  |
+         ls-0               ls-1             (Logical Switches)
+            |                  |
+         s2c-0/c2s-0        s2c-1/c2s-1
+              \\               /
+         +--- cluster (LR) ---+              (Cluster Router)
+                    |
+                sjc/rcj
+                    |
+         +----  join (LS)  ----+              (Join Switch)
+              /               \\
+         j2lr-0/lr2j-0     j2lr-1/lr2j-1
+            |                  |
+         lr-0               lr-1             (Gateway Routers)
+
+  Chassis binding (with batch size B, default n/10):
+    chassis-0: c2s-[0..B), lr-[0..B)
+    chassis-1: c2s-[B..2B), lr-[B..2B)
+    ...
+
+Each node creates a gateway router + logical switch pair with:
+  - NAT (SNAT/DNAT/DNAT_AND_SNAT), static routes, routing policies
+  - Configurable ports per switch with port security
+  - Security: Address sets, port groups, ACLs
   - Services: DHCP, DNS, load balancers
   - QoS: Bandwidth limiting, DSCP marking
 
-Note: Uses explicit (non-templated) load balancers to maximize memory usage for
-regression testing. For templated LB testing, see ovn-lb-benchmark.py.
+Note: Uses explicit (non-templated) load balancers to maximize memory
+usage for regression testing. For templated LB testing, see
+ovn-lb-benchmark.py.
 """
 
 import argparse
@@ -374,7 +398,7 @@ def add_routing_policies(idl, n, routers):
                 f'({txn.get_error()})')
 
 
-def create_topology(idl, n, ports_per_switch):
+def create_topology(idl, n, ports_per_switch, batch_size):
     """Create the basic topology with routers, switches, and ports."""
     vlog.info('Creating topology')
     txn = ovs.db.idl.Transaction(idl)
@@ -403,7 +427,7 @@ def create_topology(idl, n, ports_per_switch):
 
     for i in range(n):
         vlog.info(f'Provisioning node {i}')
-        chassis = f'chassis-{i}'
+        chassis = f'chassis-{i // batch_size}'
         gwr = txn.insert(idl.tables['Logical_Router'])
         gwr.name = f'lr-{i}'
         gwr.addvalue('load_balancer_group', lbg.uuid)
@@ -543,7 +567,7 @@ def add_explicit_lbs(idl, n, n_vips, n_backends, routers, switches):
                 die(f'Failed to add LB ({txn.get_error()})')
 
 
-def run(remote, n, n_vips, n_backends, ports_per_switch):
+def run(remote, n, n_vips, n_backends, ports_per_switch, batch_size):
     """Main execution function."""
     schema_helper = ovs.db.idl.SchemaHelper(SCHEMA)
     schema_helper.register_all()
@@ -578,7 +602,7 @@ def run(remote, n, n_vips, n_backends, ports_per_switch):
         die('Database is not empty. Please restart the sandbox or clear the '
             'database before running this script.')
 
-    create_topology(idl, n, ports_per_switch)
+    create_topology(idl, n, ports_per_switch, batch_size)
 
     # Build lookup dictionaries for O(1) access to switches and routers
     switches = {row.name: row
@@ -631,18 +655,32 @@ def main():
         help='Number backends per VIP (default: 5)',
     )
     parser.add_argument(
+        '-B',
+        '--batch-size',
+        type=int,
+        default=0,
+        help='Nodes per chassis (default: n/10)',
+    )
+    parser.add_argument(
         '-d', '--debug',
         action='store_true',
         help='Enable debug output (show info messages)',
     )
     args = parser.parse_args()
 
+    if args.batch_size <= 0:
+        args.batch_size = max(1, args.nodes // 10)
+
     if args.debug:
         vlog.set_levels_from_string('console:info')
 
     # Print configuration summary
     sys.stderr.write('\n=== OVN Benchmark Configuration ===\n')
-    sys.stderr.write(f'Nodes (router + switch pair): {args.nodes}\n')
+    sys.stderr.write(f'Nodes:                        {args.nodes}\n')
+    sys.stderr.write(f'  Per node: 1 gateway router (lr-*)'
+                     f' + 1 logical switch (ls-*)\n')
+    sys.stderr.write(f'  Shared:   1 cluster router'
+                     f' + 1 join switch\n')
     sys.stderr.write(f'Ports per switch:             {args.ports_per_switch} '
                      f'({args.ports_per_switch * args.nodes} total ports)\n')
     sys.stderr.write(f'Load balancer VIPs per node:  {args.vips} '
@@ -650,12 +688,17 @@ def main():
     sys.stderr.write(f'Backends per VIP:             {args.backends}\n')
     sys.stderr.write(f'Total load balancers:         '
                      f'{args.nodes * args.vips}\n')
+    n_chassis = ((args.nodes + args.batch_size - 1)
+                 // args.batch_size)
+    sys.stderr.write(f'Nodes per chassis (batch):    '
+                     f'{args.batch_size} '
+                     f'({n_chassis} chassis)\n')
     sys.stderr.write(f'Debug logging:                '
                      f'{"enabled" if args.debug else "disabled"}\n')
     sys.stderr.write('===================================\n\n')
 
     run(args.remote, args.nodes, args.vips, args.backends,
-        args.ports_per_switch)
+        args.ports_per_switch, args.batch_size)
 
 
 if __name__ == '__main__':
