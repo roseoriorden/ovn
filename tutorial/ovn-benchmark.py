@@ -279,6 +279,19 @@ def create_acls(idl):
     create_acls_for_port_group(idl, 'db_tier', [5432, 3306], 1000)
 
 
+def _add_acl(txn, idl, ls, priority, direction, match, action,
+             description=None):
+    """Create an ACL and attach it to a logical switch."""
+    acl = txn.insert(idl.tables['ACL'])
+    acl.priority = priority
+    acl.direction = direction
+    acl.match = match
+    acl.action = action
+    if description:
+        acl.setkey('external_ids', 'description', description)
+    ls.addvalue('acls', acl.uuid)
+
+
 def add_acls_to_switch(idl, switch_name, node_id, switches):
     """Add ACLs directly to a logical switch.
 
@@ -290,68 +303,25 @@ def add_acls_to_switch(idl, switch_name, node_id, switches):
 
     ls = switches.get(switch_name)
     if ls:
-        acl_allow_ssh = txn.insert(idl.tables['ACL'])
-        acl_allow_ssh.priority = 2000
-        acl_allow_ssh.direction = 'from-lport'
-        acl_allow_ssh.match = 'tcp.dst == 22 && ip4.src == 10.0.0.0/8'
-        acl_allow_ssh.action = 'allow'
-        acl_allow_ssh.setkey('external_ids', 'description',
-                             'Allow SSH from internal')
-        ls.addvalue('acls', acl_allow_ssh.uuid)
+        _add_acl(txn, idl, ls, 2000, 'from-lport',
+                 'tcp.dst == 22 && ip4.src == 10.0.0.0/8',
+                 'allow', 'Allow SSH from internal')
+        _add_acl(txn, idl, ls, 1500, 'from-lport',
+                 'icmp4 || icmp6', 'allow')
+        _add_acl(txn, idl, ls, 2500, 'from-lport',
+                 f'ip4.src != 10.{ip_node(node_id)}.0/24',
+                 'drop', 'Anti-spoofing')
+        _add_acl(txn, idl, ls, 2000, 'from-lport',
+                 'udp.src == 68 && udp.dst == 67', 'allow')
 
-        acl_allow_icmp = txn.insert(idl.tables['ACL'])
-        acl_allow_icmp.priority = 1500
-        acl_allow_icmp.direction = 'from-lport'
-        acl_allow_icmp.match = 'icmp4 || icmp6'
-        acl_allow_icmp.action = 'allow'
-        ls.addvalue('acls', acl_allow_icmp.uuid)
-
-        acl_deny_spoofing = txn.insert(idl.tables['ACL'])
-        acl_deny_spoofing.priority = 2500
-        acl_deny_spoofing.direction = 'from-lport'
-        acl_deny_spoofing.match = f'ip4.src != 10.{ip_node(node_id)}.0/24'
-        acl_deny_spoofing.action = 'drop'
-        acl_deny_spoofing.setkey(
-            'external_ids', 'description',
-            'Anti-spoofing')
-        ls.addvalue('acls', acl_deny_spoofing.uuid)
-
-        acl_allow_dhcp = txn.insert(idl.tables['ACL'])
-        acl_allow_dhcp.priority = 2000
-        acl_allow_dhcp.direction = 'from-lport'
-        acl_allow_dhcp.match = 'udp.src == 68 && udp.dst == 67'
-        acl_allow_dhcp.action = 'allow'
-        ls.addvalue('acls', acl_allow_dhcp.uuid)
-
-        acl_allow_ssh_v6 = txn.insert(idl.tables['ACL'])
-        acl_allow_ssh_v6.priority = 2000
-        acl_allow_ssh_v6.direction = 'from-lport'
-        acl_allow_ssh_v6.match = (
-            'tcp.dst == 22 && ip6.src == fd00::/16')
-        acl_allow_ssh_v6.action = 'allow'
-        acl_allow_ssh_v6.setkey(
-            'external_ids', 'description',
-            'Allow SSH from internal (IPv6)')
-        ls.addvalue('acls', acl_allow_ssh_v6.uuid)
-
-        acl_deny_spoofing_v6 = txn.insert(idl.tables['ACL'])
-        acl_deny_spoofing_v6.priority = 2500
-        acl_deny_spoofing_v6.direction = 'from-lport'
-        acl_deny_spoofing_v6.match = (
-            f'ip6.src != fd00:{ip6_node(node_id)}::/64')
-        acl_deny_spoofing_v6.action = 'drop'
-        acl_deny_spoofing_v6.setkey(
-            'external_ids', 'description',
-            'Anti-spoofing (IPv6)')
-        ls.addvalue('acls', acl_deny_spoofing_v6.uuid)
-
-        acl_allow_dhcpv6 = txn.insert(idl.tables['ACL'])
-        acl_allow_dhcpv6.priority = 2000
-        acl_allow_dhcpv6.direction = 'from-lport'
-        acl_allow_dhcpv6.match = (
-            'udp.src == 546 && udp.dst == 547')
-        acl_allow_dhcpv6.action = 'allow'
-        ls.addvalue('acls', acl_allow_dhcpv6.uuid)
+        _add_acl(txn, idl, ls, 2000, 'from-lport',
+                 'tcp.dst == 22 && ip6.src == fd00::/16',
+                 'allow', 'Allow SSH from internal (IPv6)')
+        _add_acl(txn, idl, ls, 2500, 'from-lport',
+                 f'ip6.src != fd00:{ip6_node(node_id)}::/64',
+                 'drop', 'Anti-spoofing (IPv6)')
+        _add_acl(txn, idl, ls, 2000, 'from-lport',
+                 'udp.src == 546 && udp.dst == 547', 'allow')
 
     if txn.commit_block() != ovs.db.idl.Transaction.SUCCESS:
         die(f'Failed to add ACLs to switch {switch_name} '
