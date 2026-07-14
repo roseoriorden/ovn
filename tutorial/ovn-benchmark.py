@@ -637,31 +637,20 @@ def assign_ports_to_groups(idl):
     """Assign logical switch ports to port groups based on tier."""
     vlog.info('Assigning ports to port groups')
 
-    web_ports = []
-    app_ports = []
-    db_ports = []
+    tier_ports = {'web': [], 'app': [], 'db': []}
 
     for row in idl.tables['Logical_Switch_Port'].rows.values():
-        ext_ids = row.external_ids
-        if 'tier' in ext_ids:
-            if ext_ids['tier'] == 'web':
-                web_ports.append(row.uuid)
-            elif ext_ids['tier'] == 'app':
-                app_ports.append(row.uuid)
-            elif ext_ids['tier'] == 'db':
-                db_ports.append(row.uuid)
+        tier = row.external_ids.get('tier')
+        if tier in tier_ports:
+            tier_ports[tier].append(row.uuid)
 
     txn = ovs.db.idl.Transaction(idl)
+    tier_to_group = {'web': 'web_tier', 'app': 'app_tier', 'db': 'db_tier'}
     for row in idl.tables['Port_Group'].rows.values():
-        if row.name == 'web_tier':
-            for port_uuid in web_ports:
-                row.addvalue('ports', port_uuid)
-        elif row.name == 'app_tier':
-            for port_uuid in app_ports:
-                row.addvalue('ports', port_uuid)
-        elif row.name == 'db_tier':
-            for port_uuid in db_ports:
-                row.addvalue('ports', port_uuid)
+        for tier, group_name in tier_to_group.items():
+            if row.name == group_name:
+                for port_uuid in tier_ports[tier]:
+                    row.addvalue('ports', port_uuid)
 
     if txn.commit_block() != ovs.db.idl.Transaction.SUCCESS:
         die(f'Failed to assign ports to groups ({txn.get_error()})')
@@ -690,19 +679,17 @@ def add_explicit_lbs(idl, n, n_vips, n_backends, routers, switches):
             port = j + 1
             j1 = (j + 1) // 250
             j2 = (j + 1) % 250
-            backends = [f'42.{k}.{j1}.{j2}:{port}' for k in range(n_backends)]
 
             lb = txn.insert(idl.tables['Load_Balancer'])
             lb.name = f'lb-{j}-{i}'
             lb.setkey('vips', f'42.42.{ip_node(i)}:{port}',
-                      ','.join(backends))
-            v6_backends = [
-                f'[fd42:{k:x}::{j1:x}:{j2:x}]:{port}'
-                for k in range(n_backends)]
+                      ','.join(f'42.{k}.{j1}.{j2}:{port}'
+                               for k in range(n_backends)))
             lb.setkey(
                 'vips',
                 f'[fd42::{ip6_node(i)}:{j:x}]:{port}',
-                ','.join(v6_backends))
+                ','.join(f'[fd42:{k:x}::{j1:x}:{j2:x}]:{port}'
+                         for k in range(n_backends)))
             lb.protocol = 'tcp'
             lr.addvalue('load_balancer', lb.uuid)
             ls.addvalue('load_balancer', lb.uuid)
@@ -716,12 +703,10 @@ def run(remote, n, n_vips, n_backends, ports_per_switch, batch_size):
     schema_helper.register_all()
     idl = ovs.db.idl.Idl(remote, schema_helper, leader_only=False)
 
-    seqno = 0
-
-    error, stream = ovs.stream.Stream.open_block(
+    err, stream = ovs.stream.Stream.open_block(
         ovs.stream.Stream.open(remote), 2000
     )
-    if error:
+    if err:
         sys.stderr.write(f'failed to connect to "{remote}"')
         sys.exit(1)
 
@@ -730,7 +715,7 @@ def run(remote, n, n_vips, n_backends, ports_per_switch, batch_size):
         sys.exit(1)
     rpc = ovs.jsonrpc.Connection(stream)
 
-    while idl.change_seqno == seqno and not idl.run():
+    while idl.change_seqno == 0 and not idl.run():
         rpc.run()
 
         poller = ovs.poller.Poller()
@@ -769,6 +754,7 @@ def run(remote, n, n_vips, n_backends, ports_per_switch, batch_size):
 
 
 def main():
+    """Parse arguments and run the benchmark."""
     parser = argparse.ArgumentParser(
         description='Create a complex OVN topology with various features'
     )
@@ -820,10 +806,10 @@ def main():
     # Print configuration summary
     sys.stderr.write('\n=== OVN Benchmark Configuration ===\n')
     sys.stderr.write(f'Nodes:                        {args.nodes}\n')
-    sys.stderr.write(f'  Per node: 1 gateway router (lr-*)'
-                     f' + 1 logical switch (ls-*)\n')
-    sys.stderr.write(f'  Shared:   1 cluster router'
-                     f' + 1 join switch\n')
+    sys.stderr.write('  Per node: 1 gateway router (lr-*)'
+                     ' + 1 logical switch (ls-*)\n')
+    sys.stderr.write('  Shared:   1 cluster router'
+                     ' + 1 join switch\n')
     sys.stderr.write(f'Ports per switch:             {args.ports_per_switch} '
                      f'({args.ports_per_switch * args.nodes} total ports)\n')
     sys.stderr.write(f'Load balancer VIPs per node:  {args.vips} '
