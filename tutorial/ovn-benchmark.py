@@ -813,7 +813,7 @@ def main():
         help='Number of LB VIPs per node (default: 5)'
     )
     parser.add_argument(
-        '-b',
+        '-B',
         '--backends',
         type=int,
         default=5,
