@@ -820,7 +820,7 @@ def main():
         help='Number backends per VIP (default: 5)',
     )
     parser.add_argument(
-        '-B',
+        '-b',
         '--batch-size',
         type=int,
         default=0,

@@ -53,11 +53,10 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 50 ovn-northd        # 50 nodes, track only ovn-northd"
             echo "  $0 --debug 20           # 20 nodes with debug output"
             echo "  $0 --file ovnnb_db.db   # Load from file"
-            echo "  $0 50 -b 10             # 50 nodes with 10 nodes per" \
-                 "chassis"
+            echo "  $0 50 -b 10             # 50 nodes, 10 per chassis"
             exit 0
             ;;
-        -B|--batch-size)
+        -b|--batch-size)
             BATCH_SIZE="$2"
             shift 2
             ;;
