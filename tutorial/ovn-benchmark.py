@@ -524,6 +524,78 @@ def add_routing_policies(idl, n, routers):
                 f'({txn.get_error()})')
 
 
+def _add_ports(txn, idl, s, i, ports_per_switch):
+    for p in range(ports_per_switch):
+        lsp = txn.insert(idl.tables['Logical_Switch_Port'])
+        lsp.name = f'lsp-{i}-{p}'
+        mac_byte = (p + 10) % 256
+        mac = (f'00:00:{i >> 8:02x}:{i & 0xff:02x}'
+               f':{p:02x}:{mac_byte:02x}')
+        ip = f'10.{ip_node(i)}.{10 + p}'
+        ip6 = f'fd00:{ip6_node(i)}::{10 + p:x}'
+        lsp.addresses = [f'{mac} {ip} {ip6}']
+        lsp.port_security = [f'{mac} {ip} {ip6}']
+        lsp.setkey('external_ids', 'vm-id', f'vm-{i}-{p}')
+
+        if p % 3 == 0:
+            lsp.setkey('external_ids', 'tier', 'web')
+        elif p % 3 == 1:
+            lsp.setkey('external_ids', 'tier', 'app')
+        else:
+            lsp.setkey('external_ids', 'tier', 'db')
+
+        s.addvalue('ports', lsp.uuid)
+
+
+def _add_node(txn, idl, i, chassis, cluster_rtr, join_sw, lbg,
+              ports_per_switch):
+    gwr = txn.insert(idl.tables['Logical_Router'])
+    gwr.name = f'lr-{i}'
+    gwr.addvalue('load_balancer_group', lbg.uuid)
+    gwr.setkey('options', 'chassis', chassis)
+
+    gwr2join = txn.insert(idl.tables['Logical_Router_Port'])
+    gwr2join.name = f'lr2j-{i}'
+    gwr2join.mac = '00:00:00:00:00:01'
+    gwr2join.networks = ['10.0.0.1/8', 'fd00::1/48']
+    gwr.addvalue('ports', gwr2join.uuid)
+
+    join2gwr = txn.insert(idl.tables['Logical_Switch_Port'])
+    join2gwr.name = f'j2lr-{i}'
+    join2gwr.type = 'router'
+    join2gwr.addresses = ['router']
+    join2gwr.setkey('options', 'router-port', gwr2join.name)
+    join_sw.addvalue('ports', join2gwr.uuid)
+
+    s = txn.insert(idl.tables['Logical_Switch'])
+    s.name = f'ls-{i}'
+    s.addvalue('load_balancer_group', lbg.uuid)
+    s.setkey('other_config', 'subnet', f'10.{ip_node(i)}.0/24')
+    s.setkey('other_config', 'mcast_snoop', 'true')
+
+    cluster2s = txn.insert(idl.tables['Logical_Router_Port'])
+    cluster2s.name = f'c2s-{i}'
+    cluster2s.mac = '00:00:00:00:00:01'
+    cluster2s.networks = [f'10.{ip_node(i)}.1/24',
+                          f'fd00:{ip6_node(i)}::1/64']
+    cluster_rtr.addvalue('ports', cluster2s.uuid)
+
+    gw_chassis = txn.insert(idl.tables['Gateway_Chassis'])
+    gw_chassis.name = f'{cluster2s.name}-{chassis}'
+    gw_chassis.chassis_name = chassis
+    gw_chassis.priority = 1
+    cluster2s.addvalue('gateway_chassis', gw_chassis.uuid)
+
+    s2cluster = txn.insert(idl.tables['Logical_Switch_Port'])
+    s2cluster.name = f's2c-{i}'
+    s2cluster.type = 'router'
+    s2cluster.addresses = ['router']
+    s2cluster.setkey('options', 'router-port', cluster2s.name)
+    s.addvalue('ports', s2cluster.uuid)
+
+    _add_ports(txn, idl, s, i, ports_per_switch)
+
+
 def create_topology(idl, n, ports_per_switch, batch_size):
     """Create the basic topology with routers, switches, and ports."""
     vlog.info('Creating topology')
@@ -554,72 +626,8 @@ def create_topology(idl, n, ports_per_switch, batch_size):
     for i in range(n):
         vlog.info(f'Provisioning node {i}')
         chassis = f'chassis-{i // batch_size}'
-        gwr = txn.insert(idl.tables['Logical_Router'])
-        gwr.name = f'lr-{i}'
-        gwr.addvalue('load_balancer_group', lbg.uuid)
-        gwr.setkey('options', 'chassis', chassis)
-
-        gwr2join = txn.insert(idl.tables['Logical_Router_Port'])
-        gwr2join.name = f'lr2j-{i}'
-        gwr2join.mac = '00:00:00:00:00:01'
-        gwr2join.networks = ['10.0.0.1/8', 'fd00::1/48']
-        gwr.addvalue('ports', gwr2join.uuid)
-
-        join2gwr = txn.insert(idl.tables['Logical_Switch_Port'])
-        join2gwr.name = f'j2lr-{i}'
-        join2gwr.type = 'router'
-        join2gwr.addresses = ['router']
-        join2gwr.setkey('options', 'router-port', gwr2join.name)
-        join_sw.addvalue('ports', join2gwr.uuid)
-
-        s = txn.insert(idl.tables['Logical_Switch'])
-        s.name = f'ls-{i}'
-        s.addvalue('load_balancer_group', lbg.uuid)
-        s.setkey('other_config', 'subnet', f'10.{ip_node(i)}.0/24')
-        s.setkey('other_config', 'mcast_snoop', 'true')
-
-        cluster2s = txn.insert(idl.tables['Logical_Router_Port'])
-        cluster2s.name = f'c2s-{i}'
-        cluster2s.mac = '00:00:00:00:00:01'
-        cluster2s.networks = [f'10.{ip_node(i)}.1/24',
-                              f'fd00:{ip6_node(i)}::1/64']
-        cluster_rtr.addvalue('ports', cluster2s.uuid)
-
-        gw_chassis = txn.insert(idl.tables['Gateway_Chassis'])
-        gw_chassis.name = f'{cluster2s.name}-{chassis}'
-        gw_chassis.chassis_name = chassis
-        gw_chassis.priority = 1
-        cluster2s.addvalue('gateway_chassis', gw_chassis.uuid)
-
-        s2cluster = txn.insert(idl.tables['Logical_Switch_Port'])
-        s2cluster.name = f's2c-{i}'
-        s2cluster.type = 'router'
-        s2cluster.addresses = ['router']
-        s2cluster.setkey('options', 'router-port', cluster2s.name)
-        s.addvalue('ports', s2cluster.uuid)
-
-        for p in range(ports_per_switch):
-            lsp = txn.insert(idl.tables['Logical_Switch_Port'])
-            lsp.name = f'lsp-{i}-{p}'
-            mac_byte = (p + 10) % 256
-            mac = (f'00:00:{i >> 8:02x}:{i & 0xff:02x}'
-                   f':{p:02x}:{mac_byte:02x}')
-            ip = f'10.{ip_node(i)}.{10 + p}'
-            ip6 = f'fd00:{ip6_node(i)}::{10 + p:x}'
-            lsp.addresses = [f'{mac} {ip} {ip6}']
-            lsp.port_security = [f'{mac} {ip} {ip6}']
-            lsp.setkey('external_ids', 'vm-id', f'vm-{i}-{p}')
-
-            # Assign ports to tiers (web/app/db) to model a typical 3-tier
-            # application and exercise port group functionality.
-            if p % 3 == 0:
-                lsp.setkey('external_ids', 'tier', 'web')
-            elif p % 3 == 1:
-                lsp.setkey('external_ids', 'tier', 'app')
-            else:
-                lsp.setkey('external_ids', 'tier', 'db')
-
-            s.addvalue('ports', lsp.uuid)
+        _add_node(txn, idl, i, chassis, cluster_rtr, join_sw, lbg,
+                  ports_per_switch)
 
     if txn.commit_block() != ovs.db.idl.Transaction.SUCCESS:
         die(f'Failed to create topology ({txn.get_error()})')
