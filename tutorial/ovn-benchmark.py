@@ -28,11 +28,13 @@ Topology (simulates the default ovn-kubernetes topology):
     chassis-1: c2s-[B..2B), lr-[B..2B)
     ...
 
-Each node creates a gateway router + logical switch pair with:
+Each node creates a dual-stack gateway router + logical switch pair
+with:
+  - Dual-stack addressing (IPv4 10.x.x.x/24, IPv6 fd00:x::/64)
   - NAT (SNAT/DNAT/DNAT_AND_SNAT), static routes, routing policies
   - Configurable ports per switch with port security
   - Security: Address sets, port groups, ACLs
-  - Services: DHCP, DNS, load balancers
+  - Services: DHCP, DHCPv6, DNS, load balancers
   - QoS: Bandwidth limiting, DSCP marking
 
 Note: Uses explicit (non-templated) load balancers to maximize memory
@@ -67,6 +69,11 @@ def ip_node(i):
     return f'{i >> 8}.{i & 0xff}'
 
 
+def ip6_node(i):
+    """Convert node index to an IPv6 hextet for ULA addresses."""
+    return f'{i:x}'
+
+
 def create_address_sets(idl, n):
     """Create address sets for security groups."""
     vlog.info('Creating address sets')
@@ -74,19 +81,26 @@ def create_address_sets(idl, n):
 
     web_as = txn.insert(idl.tables['Address_Set'])
     web_as.name = 'web_servers'
-    web_as.addresses = [f'10.{ip_node(i)}.10' for i in range(n)]
+    web_as.addresses = (
+        [f'10.{ip_node(i)}.10' for i in range(n)]
+        + [f'fd00:{ip6_node(i)}::a' for i in range(n)])
 
     db_as = txn.insert(idl.tables['Address_Set'])
     db_as.name = 'db_servers'
-    db_as.addresses = [f'10.{ip_node(i)}.20' for i in range(n)]
+    db_as.addresses = (
+        [f'10.{ip_node(i)}.20' for i in range(n)]
+        + [f'fd00:{ip6_node(i)}::14' for i in range(n)])
 
     app_as = txn.insert(idl.tables['Address_Set'])
     app_as.name = 'app_servers'
-    app_as.addresses = [f'10.{ip_node(i)}.30' for i in range(n)]
+    app_as.addresses = (
+        [f'10.{ip_node(i)}.30' for i in range(n)]
+        + [f'fd00:{ip6_node(i)}::1e' for i in range(n)])
 
     trusted_as = txn.insert(idl.tables['Address_Set'])
     trusted_as.name = 'trusted_networks'
-    trusted_as.addresses = ['192.168.0.0/16', '172.16.0.0/12']
+    trusted_as.addresses = ['192.168.0.0/16', '172.16.0.0/12',
+                            'fc00::/7']
 
     if txn.commit_block() != ovs.db.idl.Transaction.SUCCESS:
         die(f'Failed to create address sets ({txn.get_error()})')
@@ -126,6 +140,17 @@ def create_dhcp_options(idl, n):
         dhcp_opts.setkey('options', 'mtu', '1500')
         dhcp_opts.setkey('external_ids', 'subnet', f'ls-{i}')
 
+        dhcpv6_opts = txn.insert(idl.tables['DHCP_Options'])
+        dhcpv6_opts.cidr = f'fd00:{ip6_node(i)}::/64'
+        dhcpv6_opts.setkey('options', 'server_id',
+                           '00:00:00:00:00:01')
+        dhcpv6_opts.setkey('options', 'dns_server',
+                           f'fd00:{ip6_node(i)}::2')
+        dhcpv6_opts.setkey('options', 'domain_search',
+                           '"example.com"')
+        dhcpv6_opts.setkey('external_ids', 'subnet',
+                           f'ls-{i}-v6')
+
         if txn.commit_block() != ovs.db.idl.Transaction.SUCCESS:
             die(f'Failed to create DHCP options for node {i} '
                 f'({txn.get_error()})')
@@ -163,6 +188,24 @@ def create_qos_rules(idl, n, switches):
             qos_mark.setkey('action', 'mark', 1)
             qos_mark.setkey('external_ids', 'type', 'packet-marking')
             ls.addvalue('qos_rules', qos_mark.uuid)
+
+            qos_dscp_v6 = txn.insert(idl.tables['QoS'])
+            qos_dscp_v6.priority = 200
+            qos_dscp_v6.direction = 'from-lport'
+            qos_dscp_v6.match = 'ip6 && tcp.dst == 22'
+            qos_dscp_v6.setkey('action', 'dscp', 46)
+            qos_dscp_v6.setkey('external_ids', 'type',
+                               'dscp-marking-v6')
+            ls.addvalue('qos_rules', qos_dscp_v6.uuid)
+
+            qos_mark_v6 = txn.insert(idl.tables['QoS'])
+            qos_mark_v6.priority = 150
+            qos_mark_v6.direction = 'from-lport'
+            qos_mark_v6.match = 'ip6 && udp'
+            qos_mark_v6.setkey('action', 'mark', 1)
+            qos_mark_v6.setkey('external_ids', 'type',
+                               'packet-marking-v6')
+            ls.addvalue('qos_rules', qos_mark_v6.uuid)
 
         if txn.commit_block() != ovs.db.idl.Transaction.SUCCESS:
             die(f'Failed to create QoS rules for node {i} ({txn.get_error()})')
@@ -268,7 +311,9 @@ def add_acls_to_switch(idl, switch_name, node_id, switches):
         acl_deny_spoofing.direction = 'from-lport'
         acl_deny_spoofing.match = f'ip4.src != 10.{ip_node(node_id)}.0/24'
         acl_deny_spoofing.action = 'drop'
-        acl_deny_spoofing.setkey('external_ids', 'description', 'Anti-spoofing')
+        acl_deny_spoofing.setkey(
+            'external_ids', 'description',
+            'Anti-spoofing')
         ls.addvalue('acls', acl_deny_spoofing.uuid)
 
         acl_allow_dhcp = txn.insert(idl.tables['ACL'])
@@ -278,8 +323,39 @@ def add_acls_to_switch(idl, switch_name, node_id, switches):
         acl_allow_dhcp.action = 'allow'
         ls.addvalue('acls', acl_allow_dhcp.uuid)
 
+        acl_allow_ssh_v6 = txn.insert(idl.tables['ACL'])
+        acl_allow_ssh_v6.priority = 2000
+        acl_allow_ssh_v6.direction = 'from-lport'
+        acl_allow_ssh_v6.match = (
+            'tcp.dst == 22 && ip6.src == fd00::/16')
+        acl_allow_ssh_v6.action = 'allow'
+        acl_allow_ssh_v6.setkey(
+            'external_ids', 'description',
+            'Allow SSH from internal (IPv6)')
+        ls.addvalue('acls', acl_allow_ssh_v6.uuid)
+
+        acl_deny_spoofing_v6 = txn.insert(idl.tables['ACL'])
+        acl_deny_spoofing_v6.priority = 2500
+        acl_deny_spoofing_v6.direction = 'from-lport'
+        acl_deny_spoofing_v6.match = (
+            f'ip6.src != fd00:{ip6_node(node_id)}::/64')
+        acl_deny_spoofing_v6.action = 'drop'
+        acl_deny_spoofing_v6.setkey(
+            'external_ids', 'description',
+            'Anti-spoofing (IPv6)')
+        ls.addvalue('acls', acl_deny_spoofing_v6.uuid)
+
+        acl_allow_dhcpv6 = txn.insert(idl.tables['ACL'])
+        acl_allow_dhcpv6.priority = 2000
+        acl_allow_dhcpv6.direction = 'from-lport'
+        acl_allow_dhcpv6.match = (
+            'udp.src == 546 && udp.dst == 547')
+        acl_allow_dhcpv6.action = 'allow'
+        ls.addvalue('acls', acl_allow_dhcpv6.uuid)
+
     if txn.commit_block() != ovs.db.idl.Transaction.SUCCESS:
-        die(f'Failed to add ACLs to switch {switch_name} ({txn.get_error()})')
+        die(f'Failed to add ACLs to switch {switch_name} '
+            f'({txn.get_error()})')
 
 
 def create_dns_records(idl, n, switches):
@@ -288,9 +364,15 @@ def create_dns_records(idl, n, switches):
         vlog.info(f'Creating DNS records for node {i}')
         txn = ovs.db.idl.Transaction(idl)
         dns = txn.insert(idl.tables['DNS'])
-        dns.setkey('records', f'web-{i}.example.com', f'10.{ip_node(i)}.10')
-        dns.setkey('records', f'app-{i}.example.com', f'10.{ip_node(i)}.30')
-        dns.setkey('records', f'db-{i}.example.com', f'10.{ip_node(i)}.20')
+        dns.setkey('records', f'web-{i}.example.com',
+                   f'10.{ip_node(i)}.10 '
+                   f'fd00:{ip6_node(i)}::a')
+        dns.setkey('records', f'app-{i}.example.com',
+                   f'10.{ip_node(i)}.30 '
+                   f'fd00:{ip6_node(i)}::1e')
+        dns.setkey('records', f'db-{i}.example.com',
+                   f'10.{ip_node(i)}.20 '
+                   f'fd00:{ip6_node(i)}::14')
         dns.setkey('external_ids', 'zone', f'zone-{i}')
 
         ls = switches.get(f'ls-{i}')
@@ -333,8 +415,31 @@ def add_nat_rules(idl, n, routers):
             nat_dnat_and_snat.setkey('external_ids', 'service', 'db')
             lr.addvalue('nat', nat_dnat_and_snat.uuid)
 
+            nat_snat_v6 = txn.insert(idl.tables['NAT'])
+            nat_snat_v6.type = 'snat'
+            nat_snat_v6.logical_ip = f'fd00:{ip6_node(i)}::/64'
+            nat_snat_v6.external_ip = f'fd01:{ip6_node(i)}::1'
+            lr.addvalue('nat', nat_snat_v6.uuid)
+
+            nat_dnat_v6 = txn.insert(idl.tables['NAT'])
+            nat_dnat_v6.type = 'dnat'
+            nat_dnat_v6.logical_ip = f'fd00:{ip6_node(i)}::a'
+            nat_dnat_v6.external_ip = f'fd01:{ip6_node(i)}::a'
+            nat_dnat_v6.setkey('external_ids',
+                               'service', 'web-v6')
+            lr.addvalue('nat', nat_dnat_v6.uuid)
+
+            nat_ds_v6 = txn.insert(idl.tables['NAT'])
+            nat_ds_v6.type = 'dnat_and_snat'
+            nat_ds_v6.logical_ip = f'fd00:{ip6_node(i)}::14'
+            nat_ds_v6.external_ip = f'fd01:{ip6_node(i)}::14'
+            nat_ds_v6.setkey('external_ids',
+                             'service', 'db-v6')
+            lr.addvalue('nat', nat_ds_v6.uuid)
+
         if txn.commit_block() != ovs.db.idl.Transaction.SUCCESS:
-            die(f'Failed to add NAT rules for node {i} ({txn.get_error()})')
+            die(f'Failed to add NAT rules for node {i} '
+                f'({txn.get_error()})')
 
 
 def add_static_routes(idl, n, routers):
@@ -366,8 +471,37 @@ def add_static_routes(idl, n, routers):
             route_discard.setkey('external_ids', 'type', 'blackhole')
             lr.addvalue('static_routes', route_discard.uuid)
 
+            route_default_v6 = txn.insert(
+                idl.tables['Logical_Router_Static_Route'])
+            route_default_v6.ip_prefix = '::/0'
+            route_default_v6.nexthop = 'fd00::1'
+            route_default_v6.setkey('external_ids', 'type',
+                                    'default-v6')
+            lr.addvalue('static_routes', route_default_v6.uuid)
+
+            route_specific_v6 = txn.insert(
+                idl.tables['Logical_Router_Static_Route'])
+            route_specific_v6.ip_prefix = (
+                f'fd02:{ip6_node(i)}::/64')
+            route_specific_v6.nexthop = (
+                f'fd00:{ip6_node(i)}::fe')
+            route_specific_v6.setkey('external_ids', 'type',
+                                     'specific-v6')
+            lr.addvalue('static_routes',
+                        route_specific_v6.uuid)
+
+            route_discard_v6 = txn.insert(
+                idl.tables['Logical_Router_Static_Route'])
+            route_discard_v6.ip_prefix = '2001:db8::/32'
+            route_discard_v6.nexthop = 'discard'
+            route_discard_v6.setkey('external_ids', 'type',
+                                    'blackhole-v6')
+            lr.addvalue('static_routes',
+                        route_discard_v6.uuid)
+
         if txn.commit_block() != ovs.db.idl.Transaction.SUCCESS:
-            die(f'Failed to add static routes for node {i} ({txn.get_error()})')
+            die(f'Failed to add static routes for node {i} '
+                f'({txn.get_error()})')
 
 
 def add_routing_policies(idl, n, routers):
@@ -393,6 +527,28 @@ def add_routing_policies(idl, n, routers):
             policy_allow.action = 'allow'
             lr.addvalue('policies', policy_allow.uuid)
 
+            policy_reroute_v6 = txn.insert(
+                idl.tables['Logical_Router_Policy'])
+            policy_reroute_v6.priority = 100
+            policy_reroute_v6.match = (
+                f'ip6.src == fd00:{ip6_node(i)}::/64')
+            policy_reroute_v6.action = 'reroute'
+            policy_reroute_v6.nexthops = [
+                f'fd00:{ip6_node((i + 1) % n)}::1']
+            policy_reroute_v6.setkey(
+                'external_ids', 'policy',
+                'traffic-engineering-v6')
+            lr.addvalue('policies',
+                        policy_reroute_v6.uuid)
+
+            policy_allow_v6 = txn.insert(
+                idl.tables['Logical_Router_Policy'])
+            policy_allow_v6.priority = 50
+            policy_allow_v6.match = (
+                'ip6.dst == $trusted_networks')
+            policy_allow_v6.action = 'allow'
+            lr.addvalue('policies', policy_allow_v6.uuid)
+
         if txn.commit_block() != ovs.db.idl.Transaction.SUCCESS:
             die(f'Failed to add routing policies for node {i} '
                 f'({txn.get_error()})')
@@ -415,7 +571,7 @@ def create_topology(idl, n, ports_per_switch, batch_size):
     rcj = txn.insert(idl.tables['Logical_Router_Port'])
     rcj.name = 'rcj'
     rcj.mac = '00:00:00:00:00:01'
-    rcj.networks = ['10.0.0.1/8']
+    rcj.networks = ['10.0.0.1/8', 'fd00::1/48']
     cluster_rtr.addvalue('ports', rcj.uuid)
 
     sjc = txn.insert(idl.tables['Logical_Switch_Port'])
@@ -436,7 +592,7 @@ def create_topology(idl, n, ports_per_switch, batch_size):
         gwr2join = txn.insert(idl.tables['Logical_Router_Port'])
         gwr2join.name = f'lr2j-{i}'
         gwr2join.mac = '00:00:00:00:00:01'
-        gwr2join.networks = ['10.0.0.1/8']
+        gwr2join.networks = ['10.0.0.1/8', 'fd00::1/48']
         gwr.addvalue('ports', gwr2join.uuid)
 
         join2gwr = txn.insert(idl.tables['Logical_Switch_Port'])
@@ -455,7 +611,8 @@ def create_topology(idl, n, ports_per_switch, batch_size):
         cluster2s = txn.insert(idl.tables['Logical_Router_Port'])
         cluster2s.name = f'c2s-{i}'
         cluster2s.mac = '00:00:00:00:00:01'
-        cluster2s.networks = [f'10.{ip_node(i)}.1/24']
+        cluster2s.networks = [f'10.{ip_node(i)}.1/24',
+                              f'fd00:{ip6_node(i)}::1/64']
         cluster_rtr.addvalue('ports', cluster2s.uuid)
 
         gw_chassis = txn.insert(idl.tables['Gateway_Chassis'])
@@ -478,8 +635,9 @@ def create_topology(idl, n, ports_per_switch, batch_size):
             mac = (f'00:00:{i >> 8:02x}:{i & 0xff:02x}'
                    f':{p:02x}:{mac_byte:02x}')
             ip = f'10.{ip_node(i)}.{10 + p}'
-            lsp.addresses = [f'{mac} {ip}']
-            lsp.port_security = [f'{mac} {ip}']
+            ip6 = f'fd00:{ip6_node(i)}::{10 + p:x}'
+            lsp.addresses = [f'{mac} {ip} {ip6}']
+            lsp.port_security = [f'{mac} {ip} {ip6}']
             lsp.setkey('external_ids', 'vm-id', f'vm-{i}-{p}')
 
             # Assign ports to tiers (web/app/db) to model a typical 3-tier
@@ -559,7 +717,14 @@ def add_explicit_lbs(idl, n, n_vips, n_backends, routers, switches):
             lb = txn.insert(idl.tables['Load_Balancer'])
             lb.name = f'lb-{j}-{i}'
             lb.setkey('vips', f'42.42.{ip_node(i)}:{port}',
-                      f'{",".join(backends)}')
+                      ','.join(backends))
+            v6_backends = [
+                f'[fd42:{k:x}::{j1:x}:{j2:x}]:{port}'
+                for k in range(n_backends)]
+            lb.setkey(
+                'vips',
+                f'[fd42::{ip6_node(i)}:{j:x}]:{port}',
+                ','.join(v6_backends))
             lb.protocol = 'tcp'
             lr.addvalue('load_balancer', lb.uuid)
             ls.addvalue('load_balancer', lb.uuid)
