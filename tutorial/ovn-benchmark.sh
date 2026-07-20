@@ -209,8 +209,8 @@ kill $WATCHER_PID 2>/dev/null
 wait $WATCHER_PID 2>/dev/null
 
 ELAPSED_TIME=$((END_TIME - START_TIME))
-SECONDS=$((ELAPSED_TIME / 100))
-HUNDREDTHS=$((ELAPSED_TIME % 100))
+ELAPSED_SECS=$((ELAPSED_TIME / 100))
+ELAPSED_HSECS=$((ELAPSED_TIME % 100))
 
 for i in "${!PROCESS_NAME[@]}"; do
     pn=${PROCESS_NAME[$i]}
@@ -221,7 +221,7 @@ done
 echo ""
 echo "=== Benchmark Results ==="
 printf "Total time:                  %d.%02d seconds\n" \
-    $SECONDS $HUNDREDTHS
+    $ELAPSED_SECS $ELAPSED_HSECS
 
 for i in "${!PROCESS_NAME[@]}"; do
     printf "%-28s %s MB\n" \
