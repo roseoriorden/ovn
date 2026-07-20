@@ -123,7 +123,7 @@ done
 
 for pid in ${PROCESS_PIDS[@]}; do
     if [ -z "$pid" ]; then
-        echo "Error: Could not find process matching '$pid'"
+        echo "Error: Could not find process matching '${PROCESS_NAME[$i]}'"
         exit 1
     fi
 done
