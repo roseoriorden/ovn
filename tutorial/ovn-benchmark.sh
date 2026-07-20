@@ -13,15 +13,16 @@ FINAL_PEAK_MB=()
 DEBUG=false
 BATCH_SIZE=""
 WATCHER_PID=""
+BENCHMARK_TMPDIR=""
 
 # Cleanup function to kill background watcher and remove temp files.
 cleanup() {
     if [ -n "$WATCHER_PID" ]; then
         kill $WATCHER_PID 2>/dev/null
     fi
-    for pn in "${PROCESS_NAME[@]}"; do
-        rm -f peak_mem_$pn.txt
-    done
+    if [ -n "$BENCHMARK_TMPDIR" ]; then
+        rm -rf "$BENCHMARK_TMPDIR"
+    fi
 }
 
 # Register cleanup to run on script exit.
@@ -136,9 +137,11 @@ if [ "$DEBUG" = true ]; then
 fi
 
 # Create a temporary file to store the highest memory value we see.
+BENCHMARK_TMPDIR=$(mktemp -d)
 for pn in "${PROCESS_NAME[@]}"; do
-    echo 0 > peak_mem_$pn.txt
+    echo 0 > "$BENCHMARK_TMPDIR/peak_mem_$pn.txt"
 done
+
 
 # Start the background "Watcher" loop.
 while true; do
@@ -152,10 +155,10 @@ while true; do
         # If the process died, break out of both loops.
         if [ -z "${CURRENT_MEM[$i]}" ]; then break 2; fi
 
-        PEAK_MEM[$i]=$(cat peak_mem_$pn.txt)
+        PEAK_MEM[$i]=$(cat $BENCHMARK_TMPDIR/peak_mem_$pn.txt)
 
         if [ "${CURRENT_MEM[$i]}" -gt "${PEAK_MEM[$i]}" ]; then
-            echo "${CURRENT_MEM[$i]}" > peak_mem_$pn.txt
+            echo "${CURRENT_MEM[$i]}" > $BENCHMARK_TMPDIR/peak_mem_$pn.txt
         fi
     done
 
@@ -214,7 +217,7 @@ ELAPSED_HSECS=$((ELAPSED_TIME % 100))
 
 for i in "${!PROCESS_NAME[@]}"; do
     pn=${PROCESS_NAME[$i]}
-    FINAL_PEAK_KB[$i]=$(cat peak_mem_$pn.txt)
+    FINAL_PEAK_KB[$i]=$(cat $BENCHMARK_TMPDIR/peak_mem_$pn.txt)
     FINAL_PEAK_MB[$i]=$((FINAL_PEAK_KB[$i] / 1024))
 done
 
