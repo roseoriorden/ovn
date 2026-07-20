@@ -656,14 +656,6 @@ def assign_ports_to_groups(idl):
         die(f'Failed to assign ports to groups ({txn.get_error()})')
 
 
-def find_by_name(idl, table, name):
-    """Find a row by name in a table."""
-    for row in idl.tables[table].rows.values():
-        if row.name == name:
-            return row
-    return None
-
-
 def add_explicit_lbs(idl, n, n_vips, n_backends, routers, switches):
     """Add explicit (non-templated) load balancers.
 
