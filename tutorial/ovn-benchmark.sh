@@ -185,7 +185,7 @@ if [ -n "$FILE_NAME" ]; then
     ovsdb-client restore unix:$PWD/sandbox/nb1.ovsdb < "$FILE_NAME"
 else
     echo "Generating database with Python script"
-    python ovn-benchmark.py -n $NODES -b $BATCH_SIZE \
+    python3 ovn-benchmark.py -n $NODES -b $BATCH_SIZE \
         -r unix:$PWD/sandbox/nb1.ovsdb $DEBUG_FLAG
     if [ $? -ne 0 ]; then
         echo "Error: Failed to generate database"
