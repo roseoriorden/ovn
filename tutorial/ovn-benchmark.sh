@@ -118,12 +118,12 @@ if [ "$DEBUG" = true ]; then
     echo "File:        ${FILE_NAME:-None}"
 fi
 
-for pn in ${PROCESS_NAME[@]}; do
+for pn in "${PROCESS_NAME[@]}"; do
     PROCESS_PIDS+=($(pgrep -x "$pn" | head -n 1))
 done
 
-for pid in ${PROCESS_PIDS[@]}; do
-    if [ -z "$pid" ]; then
+for i in ${!PROCESS_PIDS[@]}; do
+    if [ -z "${PROCESS_PIDS[$i]}" ]; then
         echo "Error: Could not find process matching '${PROCESS_NAME[$i]}'"
         exit 1
     fi
