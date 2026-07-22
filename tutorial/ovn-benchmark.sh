@@ -119,14 +119,17 @@ if [ "$DEBUG" = true ]; then
 fi
 
 for pn in "${PROCESS_NAME[@]}"; do
+<<<<<<< HEAD
     PROCESS_PIDS+=($(pgrep -x "$pn" | head -n 1))
 done
 
 for i in ${!PROCESS_PIDS[@]}; do
-    if [ -z "${PROCESS_PIDS[$i]}" ]; then
-        echo "Error: Could not find process matching '${PROCESS_NAME[$i]}'"
+    pid=$(pgrep -x "$pn" | head -n 1)
+    if [ -z "$pid" ]; then
+        echo "Error: Could not find process matching '$pn'"
         exit 1
     fi
+    PROCESS_PIDS+=("$pid")
 done
 
 if [ "$DEBUG" = true ]; then
