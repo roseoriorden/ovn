@@ -20,6 +20,11 @@ def die(msg):
     sys.exit(1)
 
 
+def ip_node(i):
+    """Convert node index to two IP octets, supporting up to 65535 nodes."""
+    return f'{i >> 8}.{i & 0xff}'
+
+
 def create_topology(idl, n):
     vlog.info('Creating topology')
     txn = ovs.db.idl.Transaction(idl)
@@ -121,7 +126,7 @@ def add_chassis_template_vars(idl, n, n_vips, n_backends):
         txn = ovs.db.idl.Transaction(idl)
         tv = txn.insert(idl.tables['Chassis_Template_Var'])
         tv.chassis = f'chassis-{i}'
-        tv.setkey('variables', 'vip', f'42.42.42.{i}')
+        tv.setkey('variables', 'vip', f'42.42.{ip_node(i)}')
 
         for j in range(n_vips):
             port = j + 1
@@ -154,7 +159,8 @@ def add_explicit_lbs(idl, n, n_vips, n_backends):
 
             lb = txn.insert(idl.tables['Load_Balancer'])
             lb.name = f'lb-{j}-{i}'
-            lb.setkey('vips', f'42.42.42.{i}:{port}', f'{",".join(backends)}')
+            lb.setkey('vips', f'42.42.{ip_node(i)}:{port}',
+                      f'{",".join(backends)}')
             lb.protocol = 'tcp'
             lr.addvalue('load_balancer', lb.uuid)
             ls.addvalue('load_balancer', lb.uuid)
@@ -223,6 +229,11 @@ def main(argv):
     )
     parser.set_defaults(template=False)
     args = parser.parse_args()
+
+    if args.nodes > 65535:
+        sys.stderr.write('Error: maximum supported node count is 65535\n')
+        sys.exit(1)
+
     run(args.remote, args.nodes, args.vips, args.backends, args.template)
 
 
