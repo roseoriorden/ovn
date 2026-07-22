@@ -797,11 +797,8 @@ def main():
 
     # Print configuration summary
     sys.stderr.write('\n=== OVN Benchmark Configuration ===\n')
-    sys.stderr.write(f'Nodes:                        {args.nodes}\n')
-    sys.stderr.write('  Per node: 1 gateway router (lr-*)'
-                     ' + 1 logical switch (ls-*)\n')
-    sys.stderr.write('  Shared:   1 cluster router'
-                     ' + 1 join switch\n')
+    sys.stderr.write(f'Nodes:                        {args.nodes}'
+                     f' ({args.nodes} routers + {args.nodes} switches)\n')
     sys.stderr.write(f'Ports per switch:             {args.ports_per_switch} '
                      f'({args.ports_per_switch * args.nodes} total ports)\n')
     sys.stderr.write(f'Load balancer VIPs per node:  {args.vips} '
