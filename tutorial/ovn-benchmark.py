@@ -792,6 +792,15 @@ def main():
     if args.batch_size <= 0:
         args.batch_size = max(1, args.nodes // 10)
 
+    if args.nodes > 65535:
+        sys.stderr.write('Error: maximum supported node count is 65535\n')
+        sys.exit(1)
+
+    if args.ports_per_switch > 245:
+        sys.stderr.write(
+            'Error: maximum supported ports per switch is 245\n')
+        sys.exit(1)
+
     if args.debug:
         vlog.set_levels_from_string('console:info')
 
