@@ -1121,7 +1121,7 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
-AT_SETUP([ovn-controller - localnet port change and chassisredirect bridged redirect])
+AT_SETUP([ovn-controller - localnet port change and chassisredirect bridged redirect qwerty])
 AT_KEYWORDS([ovn-localnet-cr-bridged])
 
 ovn_start
