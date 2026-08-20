@@ -6,27 +6,10 @@ PROCESS_NAME=()
 FILE_NAME=""
 NODES=""
 PROCESS_PIDS=()
-CURRENT_MEM=()
-PEAK_MEM=()
 FINAL_PEAK_KB=()
 FINAL_PEAK_MB=()
 DEBUG=false
 BATCH_SIZE=""
-WATCHER_PID=""
-BENCHMARK_TMPDIR=""
-
-# Cleanup function to kill background watcher and remove temp files.
-cleanup() {
-    if [ -n "$WATCHER_PID" ]; then
-        kill $WATCHER_PID 2>/dev/null
-    fi
-    if [ -n "$BENCHMARK_TMPDIR" ]; then
-        rm -rf "$BENCHMARK_TMPDIR"
-    fi
-}
-
-# Register cleanup to run on script exit.
-trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -47,6 +30,10 @@ while [[ $# -gt 0 ]]; do
                  "(default: NODES/10)"
             echo "  -d, --debug           Enable debug output"
             echo "  -h, --help            Show this help message"
+            echo ""
+            echo "Memory tracking uses peak virtual memory (VmPeak) from"
+            echo "/proc/<pid>/status, which captures all allocated memory"
+            echo "including pages not yet accessed."
             echo ""
             echo "Examples:"
             echo "  $0                      # 200 nodes, track both processes"
@@ -134,37 +121,6 @@ if [ "$DEBUG" = true ]; then
     done
 fi
 
-# Create a temporary file to store the highest memory value we see.
-BENCHMARK_TMPDIR=$(mktemp -d)
-for pn in "${PROCESS_NAME[@]}"; do
-    echo 0 > "$BENCHMARK_TMPDIR/peak_mem_$pn.txt"
-done
-
-
-# Start the background "Watcher" loop.
-while true; do
-    for i in "${!PROCESS_NAME[@]}"; do
-        pn="${PROCESS_NAME[$i]}"
-        pid="${PROCESS_PIDS[$i]}"
-
-        # Get the Resident Set Size (RSS) memory in KB.
-        CURRENT_MEM[$i]=$(ps -p $pid -o rss= 2>/dev/null)
-
-        # If the process died, break out of both loops.
-        if [ -z "${CURRENT_MEM[$i]}" ]; then break 2; fi
-
-        PEAK_MEM[$i]=$(cat "$BENCHMARK_TMPDIR/peak_mem_$pn.txt")
-
-        if [ "${CURRENT_MEM[$i]}" -gt "${PEAK_MEM[$i]}" ]; then
-            echo "${CURRENT_MEM[$i]}" > "$BENCHMARK_TMPDIR/peak_mem_$pn.txt"
-        fi
-    done
-
-    sleep 0.5
-done &
-
-WATCHER_PID=$!
-
 START_TIME=$(date +%s%2N)
 
 if [ "$DEBUG" = true ]; then
@@ -206,29 +162,26 @@ ovs-appctl -t $PWD/sandbox/sb1 ovsdb-server/compact
 
 END_TIME=$(date +%s%2N)
 
-kill $WATCHER_PID 2>/dev/null
-wait $WATCHER_PID 2>/dev/null
-
 ELAPSED_TIME=$((END_TIME - START_TIME))
 ELAPSED_SECS=$((ELAPSED_TIME / 100))
 ELAPSED_HSECS=$((ELAPSED_TIME % 100))
 
 for i in "${!PROCESS_NAME[@]}"; do
-    pn=${PROCESS_NAME[$i]}
-    FINAL_PEAK_KB[$i]=$(cat "$BENCHMARK_TMPDIR/peak_mem_$pn.txt")
+    pid=${PROCESS_PIDS[$i]}
+    FINAL_PEAK_KB[$i]=$(awk '/^VmPeak:/{print $2}' /proc/$pid/status 2>/dev/null)
+    if [ -z "${FINAL_PEAK_KB[$i]}" ]; then
+        FINAL_PEAK_KB[$i]=0
+    fi
     FINAL_PEAK_MB[$i]=$((FINAL_PEAK_KB[$i] / 1024))
 done
 
 echo ""
 echo "=== Benchmark Results ==="
-printf "Total time:                  %d.%02d seconds\n" \
-    $ELAPSED_SECS $ELAPSED_HSECS
-
+printf "Total time:  %d.%02d seconds\n" $ELAPSED_SECS $ELAPSED_HSECS
+echo "Peak virtual memory (VmPeak):"
 for i in "${!PROCESS_NAME[@]}"; do
-    printf "%-28s %s MB\n" \
-        "${PROCESS_NAME[$i]} peak memory:" "${FINAL_PEAK_MB[$i]}"
+    printf "  %-15s %d MB\n" \
+        "${PROCESS_NAME[$i]}:" "${FINAL_PEAK_MB[$i]}"
 done
 echo "========================="
 echo ""
-
-# Cleanup handled by trap on EXIT.

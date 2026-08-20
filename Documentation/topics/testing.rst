@@ -300,8 +300,10 @@ ovn-benchmark
 The ``tutorial/`` directory contains a memory and performance benchmarking
 tool that can be used to detect regressions between commits:
 
-- ``ovn-benchmark.sh``: Shell wrapper that tracks peak memory (RSS) and
-  wall-clock time for ``ovn-northd`` and ``ovn-controller``.
+- ``ovn-benchmark.sh``: Shell wrapper that tracks peak virtual memory
+  (VmPeak) and wall-clock time for ``ovn-northd`` and ``ovn-controller``.
+  VmPeak is read from ``/proc/<pid>/status`` and captures all allocated
+  memory including pages not yet accessed.
 - ``ovn-benchmark.py``: Python script that populates the Northbound database
   with a realistic ovn-kubernetes-style topology.
 
