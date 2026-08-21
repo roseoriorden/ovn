@@ -10,6 +10,20 @@ FINAL_PEAK_KB=()
 FINAL_PEAK_MB=()
 DEBUG=false
 BATCH_SIZE=""
+VALGRIND_MODE=false
+VALGRIND_PIDS=()
+MASSIF_FILES=()
+BENCHMARK_TMPDIR=""
+
+cleanup() {
+    for vpid in "${VALGRIND_PIDS[@]}"; do
+        kill "$vpid" 2>/dev/null
+    done
+    if [ -n "$BENCHMARK_TMPDIR" ]; then
+        rm -rf "$BENCHMARK_TMPDIR"
+    fi
+}
+trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -28,12 +42,16 @@ while [[ $# -gt 0 ]]; do
                  "file instead of generating"
             echo "  -b, --batch-size N    Nodes per chassis" \
                  "(default: NODES/10)"
+            echo "  -v, --valgrind        Track heap with Valgrind Massif"
+            echo "                        (much slower, most accurate)"
             echo "  -d, --debug           Enable debug output"
             echo "  -h, --help            Show this help message"
             echo ""
-            echo "Memory tracking uses peak virtual memory (VmPeak) from"
-            echo "/proc/<pid>/status, which captures all allocated memory"
-            echo "including pages not yet accessed."
+            echo "Memory tracking:"
+            echo "  Default: peak virtual memory (VmPeak) from /proc/<pid>/status,"
+            echo "  capturing all allocated memory including pages not yet accessed."
+            echo "  --valgrind: peak heap memory from Valgrind Massif, restarting"
+            echo "  the tracked processes under valgrind. Expect 10-50x slowdown."
             echo ""
             echo "Examples:"
             echo "  $0                      # 200 nodes, track both processes"
@@ -47,6 +65,10 @@ while [[ $# -gt 0 ]]; do
         -b|--batch-size)
             BATCH_SIZE="$2"
             shift 2
+            ;;
+        -v|--valgrind)
+            VALGRIND_MODE=true
+            shift
             ;;
         -d|--debug)
             DEBUG=true
@@ -121,6 +143,71 @@ if [ "$DEBUG" = true ]; then
     done
 fi
 
+if [ "$VALGRIND_MODE" = true ]; then
+    if ! command -v valgrind >/dev/null 2>&1; then
+        echo "Error: valgrind is not installed or not in PATH"
+        exit 1
+    fi
+
+    BENCHMARK_TMPDIR=$(mktemp -d)
+    echo "Restarting processes under Valgrind Massif..."
+    echo "(Expect 10-50x slowdown)"
+
+    for i in "${!PROCESS_NAME[@]}"; do
+        pn="${PROCESS_NAME[$i]}"
+        pid="${PROCESS_PIDS[$i]}"
+
+        # Read the original command line (NUL-separated args) into an array.
+        mapfile -d '' orig_args < /proc/$pid/cmdline
+        [ -z "${orig_args[-1]}" ] && unset 'orig_args[-1]'
+
+        proc_cwd=$(readlink /proc/$pid/cwd)
+        massif_file="$BENCHMARK_TMPDIR/massif.$pn.out"
+        MASSIF_FILES+=("$massif_file")
+
+        # Strip args that conflict with foreground execution under valgrind.
+        filtered_args=()
+        skip_next=false
+        for arg in "${orig_args[@]}"; do
+            if [ "$skip_next" = true ]; then
+                skip_next=false
+                continue
+            fi
+            case "$arg" in
+                --detach|--no-chdir) ;;
+                --pidfile|--pid-file) skip_next=true ;;
+                --pidfile=*|--pid-file=*) ;;
+                *) filtered_args+=("$arg") ;;
+            esac
+        done
+
+        if [ "$DEBUG" = true ]; then
+            echo "Stopping $pn (PID $pid)..."
+        fi
+
+        kill "$pid"
+        while [ -e "/proc/$pid" ]; do sleep 0.1; done
+
+        if [ "$DEBUG" = true ]; then
+            echo "Starting $pn under valgrind:"
+            echo "  valgrind --tool=massif --massif-out-file=$massif_file" \
+                 "${filtered_args[*]}"
+        fi
+
+        # exec replaces the subshell with valgrind so $! is valgrind's
+        # actual PID and SIGTERM reaches it to finalize massif output.
+        (cd "$proc_cwd" && exec valgrind \
+            --tool=massif \
+            --massif-out-file="$massif_file" \
+            "${filtered_args[@]}" \
+            >/dev/null 2>&1) &
+        VALGRIND_PIDS+=("$!")
+    done
+
+    echo "Waiting for processes to reconnect..."
+    sleep 5
+fi
+
 START_TIME=$(date +%s%2N)
 
 if [ "$DEBUG" = true ]; then
@@ -166,19 +253,52 @@ ELAPSED_TIME=$((END_TIME - START_TIME))
 ELAPSED_SECS=$((ELAPSED_TIME / 100))
 ELAPSED_HSECS=$((ELAPSED_TIME % 100))
 
-for i in "${!PROCESS_NAME[@]}"; do
-    pid=${PROCESS_PIDS[$i]}
-    FINAL_PEAK_KB[$i]=$(awk '/^VmPeak:/{print $2}' /proc/$pid/status 2>/dev/null)
-    if [ -z "${FINAL_PEAK_KB[$i]}" ]; then
-        FINAL_PEAK_KB[$i]=0
-    fi
-    FINAL_PEAK_MB[$i]=$((FINAL_PEAK_KB[$i] / 1024))
-done
+if [ "$VALGRIND_MODE" = true ]; then
+    # Stop valgrind processes so they finalize massif output files.
+    for vpid in "${VALGRIND_PIDS[@]}"; do
+        kill "$vpid" 2>/dev/null
+    done
+    for vpid in "${VALGRIND_PIDS[@]}"; do
+        while [ -e "/proc/$vpid" ]; do sleep 0.1; done
+    done
+
+    for i in "${!PROCESS_NAME[@]}"; do
+        pn="${PROCESS_NAME[$i]}"
+        massif_file="${MASSIF_FILES[$i]}"
+        if [ ! -s "$massif_file" ]; then
+            echo "Warning: massif output missing for $pn;" \
+                 "did valgrind exit cleanly?"
+            FINAL_PEAK_KB[$i]=0
+        else
+            # Sum heap + allocator overhead per snapshot; report the peak.
+            FINAL_PEAK_KB[$i]=$(awk -F= '
+                /^mem_heap_B=/{h=$2}
+                /^mem_heap_extra_B=/{e=$2; t=h+e; if(t>peak) peak=t}
+                END{print int(peak/1024)}
+            ' "$massif_file")
+        fi
+        FINAL_PEAK_MB[$i]=$((FINAL_PEAK_KB[$i] / 1024))
+    done
+else
+    for i in "${!PROCESS_NAME[@]}"; do
+        pid=${PROCESS_PIDS[$i]}
+        FINAL_PEAK_KB[$i]=$(awk '/^VmPeak:/{print $2}' \
+            /proc/$pid/status 2>/dev/null)
+        if [ -z "${FINAL_PEAK_KB[$i]}" ]; then
+            FINAL_PEAK_KB[$i]=0
+        fi
+        FINAL_PEAK_MB[$i]=$((FINAL_PEAK_KB[$i] / 1024))
+    done
+fi
 
 echo ""
 echo "=== Benchmark Results ==="
 printf "Total time:  %d.%02d seconds\n" $ELAPSED_SECS $ELAPSED_HSECS
-echo "Peak virtual memory (VmPeak):"
+if [ "$VALGRIND_MODE" = true ]; then
+    echo "Peak heap memory (Valgrind Massif):"
+else
+    echo "Peak virtual memory (VmPeak):"
+fi
 for i in "${!PROCESS_NAME[@]}"; do
     printf "  %-15s %d MB\n" \
         "${PROCESS_NAME[$i]}:" "${FINAL_PEAK_MB[$i]}"
