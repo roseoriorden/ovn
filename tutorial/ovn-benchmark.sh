@@ -52,6 +52,7 @@ while [[ $# -gt 0 ]]; do
             echo "  capturing all allocated memory including pages not yet accessed."
             echo "  --valgrind: peak heap memory from Valgrind Massif, restarting"
             echo "  the tracked processes under valgrind. Expect 10-50x slowdown."
+            echo "  Recommended node count for valgrind mode: 500 or fewer."
             echo ""
             echo "Examples:"
             echo "  $0                      # 200 nodes, track both processes"
@@ -149,6 +150,11 @@ if [ "$VALGRIND_MODE" = true ]; then
         exit 1
     fi
 
+    if [ "$NODES" -gt 200 ]; then
+        echo "Warning: valgrind mode with $NODES nodes may be very slow." \
+             "Consider using 500 or fewer nodes for heap profiling."
+    fi
+
     BENCHMARK_TMPDIR=$(mktemp -d)
     echo "Restarting processes under Valgrind Massif..."
     echo "(Expect 10-50x slowdown)"
@@ -164,6 +170,10 @@ if [ "$VALGRIND_MODE" = true ]; then
         proc_cwd=$(readlink /proc/$pid/cwd)
         massif_file="$BENCHMARK_TMPDIR/massif.$pn.out"
         MASSIF_FILES+=("$massif_file")
+
+        # Save original cmdline and cwd so we can restart after valgrind.
+        cp /proc/$pid/cmdline "$BENCHMARK_TMPDIR/cmdline.$pn"
+        echo "$proc_cwd" > "$BENCHMARK_TMPDIR/cwd.$pn"
 
         # Strip args that conflict with foreground execution under valgrind.
         filtered_args=()
@@ -196,9 +206,15 @@ if [ "$VALGRIND_MODE" = true ]; then
 
         # exec replaces the subshell with valgrind so $! is valgrind's
         # actual PID and SIGTERM reaches it to finalize massif output.
+        # --max-snapshots, --detailed-freq, and --depth reduce the cost
+        # of each snapshot, which otherwise scales with the number of
+        # live allocations and becomes prohibitive at large node counts.
         (cd "$proc_cwd" && exec valgrind \
             --tool=massif \
             --massif-out-file="$massif_file" \
+            --max-snapshots=50 \
+            --detailed-freq=20 \
+            --depth=10 \
             "${filtered_args[@]}" \
             >/dev/null 2>&1) &
         VALGRIND_PIDS+=("$!")
@@ -241,10 +257,13 @@ for i in $(seq 0 $((BATCH_SIZE - 1))); do
         external_ids:iface-id=lsp-${i}-0
 done
 
+echo "+ ovn-nbctl --wait=hv sync"
 # Wait for ovn-controller to claim ports and finish processing.
 ovn-nbctl --wait=hv sync
 
+echo "Compacting nb db..."
 ovs-appctl -t $PWD/sandbox/nb1 ovsdb-server/compact
+echo "Compacting sb db..."
 ovs-appctl -t $PWD/sandbox/sb1 ovsdb-server/compact
 
 END_TIME=$(date +%s%2N)
@@ -254,17 +273,40 @@ ELAPSED_SECS=$((ELAPSED_TIME / 100))
 ELAPSED_HSECS=$((ELAPSED_TIME % 100))
 
 if [ "$VALGRIND_MODE" = true ]; then
-    # Stop valgrind processes so they finalize massif output files.
-    for vpid in "${VALGRIND_PIDS[@]}"; do
+    if [ "$DEBUG" = true ]; then
+        echo "Benchmark complete. Stopping valgrind and collecting results..."
+    fi
+
+    # Signal all valgrind processes to stop.  Each valgrind instance
+    # propagates the signal to its child OVN process, waits for it to
+    # exit, then writes the massif output file and exits itself.
+    for i in "${!PROCESS_NAME[@]}"; do
+        pn="${PROCESS_NAME[$i]}"
+        vpid="${VALGRIND_PIDS[$i]}"
+        if [ "$DEBUG" = true ]; then
+            echo "Stopping valgrind for $pn (PID $vpid)..."
+        fi
         kill "$vpid" 2>/dev/null
     done
-    for vpid in "${VALGRIND_PIDS[@]}"; do
+
+    for i in "${!PROCESS_NAME[@]}"; do
+        pn="${PROCESS_NAME[$i]}"
+        vpid="${VALGRIND_PIDS[$i]}"
+        if [ "$DEBUG" = true ]; then
+            echo "Waiting for valgrind to write massif output for $pn..."
+        fi
         while [ -e "/proc/$vpid" ]; do sleep 0.1; done
+        if [ "$DEBUG" = true ]; then
+            echo "Massif output for $pn ready."
+        fi
     done
 
     for i in "${!PROCESS_NAME[@]}"; do
         pn="${PROCESS_NAME[$i]}"
         massif_file="${MASSIF_FILES[$i]}"
+        if [ "$DEBUG" = true ]; then
+            echo "Parsing massif output for $pn..."
+        fi
         if [ ! -s "$massif_file" ]; then
             echo "Warning: massif output missing for $pn;" \
                  "did valgrind exit cleanly?"
@@ -278,6 +320,30 @@ if [ "$VALGRIND_MODE" = true ]; then
             ' "$massif_file")
         fi
         FINAL_PEAK_MB[$i]=$((FINAL_PEAK_KB[$i] / 1024))
+    done
+
+    # Restart each process with its original arguments.
+    for i in "${!PROCESS_NAME[@]}"; do
+        pn="${PROCESS_NAME[$i]}"
+        restart_cwd=$(cat "$BENCHMARK_TMPDIR/cwd.$pn")
+        mapfile -d '' restart_args < "$BENCHMARK_TMPDIR/cmdline.$pn"
+        [ -z "${restart_args[-1]}" ] && unset 'restart_args[-1]'
+        if [ "$DEBUG" = true ]; then
+            echo "Restarting $pn..."
+        fi
+        (cd "$restart_cwd" && "${restart_args[@]}" >/dev/null 2>&1)
+    done
+
+    # Wait for each process to appear before returning.
+    for pn in "${PROCESS_NAME[@]}"; do
+        deadline=$(($(date +%s) + 10))
+        while ! pgrep -x "$pn" >/dev/null 2>&1; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "Warning: $pn did not restart within 10 seconds"
+                break
+            fi
+            sleep 0.1
+        done
     done
 else
     for i in "${!PROCESS_NAME[@]}"; do
