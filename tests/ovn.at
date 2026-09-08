@@ -40196,7 +40196,14 @@ sleep_ovsdb hv1
 # As ovsdb is sleeping those multiple updates would resulti in requests to ovsdb being
 # postponed as ovsdb becomes ro.
 # Hence, patch port creation would be delayed after ovsdb becomes rw.
-check ovn-nbctl --wait=hv lsp-add-localnet-port ls1 ln1 phys
+#
+# --wait=hv can't be used here: ovn-controller only reports an update as
+# processed once the patch ports it needs are in the local OVS database, which
+# can't happen while ovsdb-server is frozen.  Wait for the engine to pick up
+# the new localnet port instead.
+runtime_data_runs=$(as hv1 ovn-appctl -t ovn-controller inc-engine/show-stats runtime_data compute)
+check ovn-nbctl --wait=sb lsp-add-localnet-port ls1 ln1 phys
+OVS_WAIT_UNTIL([test $(as hv1 ovn-appctl -t ovn-controller inc-engine/show-stats runtime_data compute) -gt $runtime_data_runs])
 
 # Controller should now have created the patch port, but is not yet notified of the ofport of those interfaces
 sleep_controller hv1

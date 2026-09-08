@@ -1175,8 +1175,25 @@ router_dp_key=$(printf "%x" $(fetch_column datapath tunnel_key external_ids:name
 cr_key=$(printf "%x" $(fetch_column port_binding tunnel_key logical_port=cr-router-to-underlay))
 AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=OFTABLE_LOCAL_OUTPUT | grep -q "reg15=0x${cr_key},metadata=0x${router_dp_key}"])
 
-dnl Delete the localnet port on ls-underlay.
-check ovn-nbctl --wait=hv lsp-del ln-underlay
+dnl Delete the localnet port on ls-underlay.  Before hv2 can remove the CR
+dnl bridged redirect flow it has to remove the localnet patch port from its
+dnl local OVS database.  Freeze hv2's ovsdb-server so that the removal cannot
+dnl complete and check that hv2 does not report the new nb_cfg as processed
+dnl while that is the case.
+sleep_ovsdb hv2
+check ovn-nbctl lsp-del ln-underlay
+
+nb_cfg=$(($(ovn-nbctl get NB_Global . nb_cfg) + 1))
+check ovn-nbctl set NB_Global . nb_cfg=${nb_cfg}
+
+dnl hv1 is unaffected, so it acknowledges the update.  By the time it does,
+dnl hv2 has had the same chance to do so.
+OVS_WAIT_UNTIL([test "$(fetch_column chassis_private nb_cfg name=hv1)" = "${nb_cfg}"])
+AT_CHECK([test "$(fetch_column chassis_private nb_cfg name=hv2)" != "${nb_cfg}"])
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=OFTABLE_LOCAL_OUTPUT | grep -q "reg15=0x${cr_key},metadata=0x${router_dp_key}"])
+
+wake_up_ovsdb hv2
+check ovn-nbctl --wait=hv sync
 AT_CHECK([as hv2 ovs-ofctl dump-flows br-int table=OFTABLE_LOCAL_OUTPUT | grep "reg15=0x${cr_key},metadata=0x${router_dp_key}"], [1])
 
 dnl Pre-create the patch port that the new localnet port

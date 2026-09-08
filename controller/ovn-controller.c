@@ -8407,10 +8407,12 @@ main(int argc, char *argv[])
                         }
                     }
 
+                    bool patch_ports_out_of_sync = false;
+
                     runtime_data = engine_get_data(&en_runtime_data);
                     if (runtime_data) {
                         stopwatch_start(PATCH_RUN_STOPWATCH_NAME, time_msec());
-                        patch_run(ovs_idl_txn,
+                        patch_ports_out_of_sync = patch_run(ovs_idl_txn,
                             sbrec_port_binding_by_type,
                             ovsrec_bridge_table_get(ovs_idl_loop.idl),
                             ovsrec_open_vswitch_table_get(ovs_idl_loop.idl),
@@ -8539,13 +8541,20 @@ main(int argc, char *argv[])
                      * eventual completion can be attributed to the
                      * timestamp that corresponded to this exact nb_cfg
                      * generation -- not whatever SB_Global value has
-                     * moved on to by the time the barrier acks. */
-                    struct nb_cfg_snap snap = get_nb_cfg(
-                        sbrec_sb_global_table_get(ovnsb_idl_loop.idl),
-                        ovnsb_cond_seqno, ovnsb_expected_cond_seqno);
-                    ofctrl_stamped_seqno_update_create(ofctrl_seq_type_nb_cfg,
-                                                      snap.nb_cfg,
-                                                      snap.ts);
+                     * moved on to by the time the barrier acks.
+                     *
+                     * Skip this while the local OVS database is still
+                     * missing patch ports we need: the flows that use them
+                     * can't be installed yet, so pairing 'nb_cfg' with the
+                     * barrier for the flows we're about to push would report
+                     * the configuration as applied too early. */
+                    if (!patch_ports_out_of_sync) {
+                        struct nb_cfg_snap snap = get_nb_cfg(
+                            sbrec_sb_global_table_get(ovnsb_idl_loop.idl),
+                            ovnsb_cond_seqno, ovnsb_expected_cond_seqno);
+                        ofctrl_stamped_seqno_update_create(
+                            ofctrl_seq_type_nb_cfg, snap.nb_cfg, snap.ts);
+                    }
 
                     struct local_binding_data *binding_data =
                         runtime_data ? &runtime_data->lbinding_data : NULL;
