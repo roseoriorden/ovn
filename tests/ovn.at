@@ -40238,14 +40238,19 @@ check ovn-nbctl --wait=hv sync
 
 sleep_ovsdb hv1
 
-# Do following operations through one nbctl command
-# Otherwise, they would probably result in multiple sb updates to ovn-controller
-# As ovsdb is sleeping those multiple updates would resulti in requests to ovsdb being
-# postponed as ovsdb becomes ro.
-# Hence, patch port creation would be delayed after ovsdb becomes rw.
-check ovn-nbctl --wait=hv lsp-add-localnet-port ls1 ln1 phys
+# Create a localnet port and wait for ovn-controller to process the change.
+# --wait=hv cannot be used here because hv1's ovsdb is asleep.
+# Make sure ovn-controller has not updated nb_cfg.
+runtime_data_runs=$(as hv1 ovn-appctl -t ovn-controller inc-engine/show-stats runtime_data compute)
+nb_cfg="$(fetch_column nb:NB_Global nb_cfg)"
 
-# Controller should now have created the patch port, but is not yet notified of the ofport of those interfaces
+check ovn-nbctl --wait=sb lsp-add-localnet-port ls1 ln1 phys
+
+OVS_WAIT_UNTIL([test $(as hv1 ovn-appctl -t ovn-controller inc-engine/show-stats runtime_data compute) -gt $runtime_data_runs])
+check_row_count Chassis_Private 1 name=hv1 nb_cfg="${nb_cfg}"
+
+# Controller should now have sent transaction to create the patch port, but it
+# has not yet been received by ovsdb-server.
 sleep_controller hv1
 wake_up_ovsdb hv1
 check as hv1 ovs-vsctl remove Interface vif1 external_ids iface-id
