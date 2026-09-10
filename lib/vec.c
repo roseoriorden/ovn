@@ -164,6 +164,9 @@ vector_clone(struct vector *vec)
     };
 
     if (vec->capacity) {
+        if (vec->esize > SIZE_MAX / vec->capacity) {
+            abort();
+        }
         clone.buffer = xmalloc(BYTE_SIZE(vec, vec->capacity));
         memcpy(clone.buffer, vec->buffer, BYTE_SIZE(vec, vec->len));
     }
@@ -203,6 +206,9 @@ vector_resize(struct vector *vec, size_t new_capacity)
         return;
     }
 
+    if (vec->esize > SIZE_MAX / new_capacity) {
+        abort();
+    }
     vec->buffer = xrealloc(vec->buffer, BYTE_SIZE(vec, new_capacity));
     vec->capacity = new_capacity;
 }
