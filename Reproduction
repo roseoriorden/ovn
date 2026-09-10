@@ -1,0 +1,5 @@
+struct vector v = vector_create(sizeof(int), 8);
+vector_push_array(&v, &x, 1);
+vector_remove(&v, 0, NULL);       // len=0, capacity=8, buffer still allocated
+struct vector c = vector_clone(&v); // len=0, capacity=8, buffer=NULL  ← BUG
+vector_push_array(&c, &y, 1);      // reserve is no-op, memcpy to NULL → CRASH

@@ -22,7 +22,7 @@
 
 static void vector_resize(struct vector *vec, size_t new_capacity);
 
-/* Inerts element at index, the content at the index is shifted right.
+/* Inserts element at index, the content at the index is shifted right.
  * Returns 'false' if the index is out of bounds. Note that the element
  * is pointer to the type being stored, e.g. in case of char *
  * char ** should be passed. */
@@ -59,7 +59,7 @@ vector_push_array(struct vector *vec, const void *src, size_t n)
 bool
 vector_remove(struct vector *vec, size_t index, void *element)
 {
-    if (index >= vec->len || vec->len == 0) {
+    if (index >= vec->len) {
         return false;
     }
 
@@ -82,7 +82,7 @@ vector_remove(struct vector *vec, size_t index, void *element)
 bool
 vector_remove_fast(struct vector *vec, size_t index, void *element)
 {
-    if (index >= vec->len || vec->len == 0) {
+    if (index >= vec->len) {
         return false;
     }
 
@@ -160,7 +160,7 @@ vector_clone(struct vector *vec)
         .capacity = vec->capacity,
     };
 
-    if (vec->len) {
+    if (vec->capacity) {
         clone.buffer = xmalloc(BYTE_SIZE(vec, vec->capacity));
         memcpy(clone.buffer, vec->buffer, BYTE_SIZE(vec, vec->len));
     }
