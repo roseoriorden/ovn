@@ -99,8 +99,9 @@ memory_trimmer_wait(struct memory_trimmer *mt)
 }
 
 void
-memory_trimmer_trim(struct memory_trimmer *mt OVS_UNUSED)
+memory_trimmer_trim(struct memory_trimmer *mt)
 {
+    (void) mt;
 #if HAVE_DECL_MALLOC_TRIM
     malloc_trim(0);
 #endif
