@@ -47,6 +47,9 @@ vector_insert(struct vector *vec, size_t index, const void *element)
 void
 vector_push_array(struct vector *vec, const void *src, size_t n)
 {
+    if (n > SIZE_MAX - vec->len) {
+        abort();
+    }
     vector_reserve(vec, n);
     memcpy((uint8_t *) vec->buffer + BYTE_SIZE(vec, vec->len), src,
            BYTE_SIZE(vec, n));
@@ -172,14 +175,24 @@ vector_clone(struct vector *vec)
 void
 vector_reserve(struct vector *vec, size_t n)
 {
-    size_t new_len = vec->len + n;
+    size_t new_len;
+    if (n > SIZE_MAX - vec->len) {
+        abort();
+    }
+    new_len = vec->len + n;
     if (new_len <= vec->capacity) {
         return;
     }
 
-    vector_resize(vec, new_len <= 2 * vec->capacity ?
-                  2 * vec->capacity :
-                  new_len);
+    size_t new_capacity;
+    if (vec->capacity > SIZE_MAX / 2) {
+        new_capacity = new_len;
+    } else {
+        new_capacity = new_len <= 2 * vec->capacity
+            ? 2 * vec->capacity
+            : new_len;
+    }
+    vector_resize(vec, new_capacity);
 }
 
 static void

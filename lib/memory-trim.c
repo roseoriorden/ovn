@@ -102,7 +102,7 @@ void
 memory_trimmer_trim(struct memory_trimmer *mt OVS_UNUSED)
 {
 #if HAVE_DECL_MALLOC_TRIM
-        malloc_trim(0);
+    malloc_trim(0);
 #endif
 }
 
