@@ -268,6 +268,37 @@ if [ "$TESTSUITE" ]; then
         "upgrade-test")
         execute_system_tests "check-upgrade" "system-kmod-testsuite.log"
         ;;
+
+        "benchmark")
+        configure_ovn $OPTS
+        make $JOBS || { cat config.log; exit 1; }
+
+        if [ "$BENCHMARK_VALGRIND" = "yes" ]; then
+            if ! command -v valgrind >/dev/null 2>&1; then
+                dnf install -y valgrind 2>/dev/null || \
+                    apt-get install -y valgrind 2>/dev/null || true
+            fi
+            VALGRIND_FLAG="-v"
+        else
+            VALGRIND_FLAG=""
+        fi
+
+        BENCHMARK_NODES=${BENCHMARK_NODES:-200}
+        RESULTS_FILE="/workspace/ovn/benchmark-results.json"
+
+        cat > /tmp/run-benchmark.sh << BENCHEOF
+#!/bin/bash
+./ovn-benchmark.sh $BENCHMARK_NODES $VALGRIND_FLAG --json -o $RESULTS_FILE
+BENCHEOF
+        chmod +x /tmp/run-benchmark.sh
+
+        BUILD_DIR=$(pwd)
+        cd tutorial
+        MAKE=make HAVE_OPENSSL=no SHELL=/tmp/run-benchmark.sh \
+            ./ovn-sandbox -b "$BUILD_DIR" \
+            --ovs-src "$BUILD_DIR/ovs" \
+            --ovs-build "$BUILD_DIR/ovs"
+        ;;
     esac
 else
     configure_ovn $OPTS

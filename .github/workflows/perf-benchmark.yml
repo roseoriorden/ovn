@@ -1,0 +1,153 @@
+name: Performance Benchmark
+
+# DO SOMETHING LIKE THIS IN FINAL CI VERSION:
+# (copied from ovs clang-analyze-cache)
+#
+# if [ "$EVENT_BEFORE" = "0000000000000000000000000000000000000000" ] \
+#    || [ "$FORCED_PUSH" = true ]; then
+#   BASE_SHA=HEAD~1
+#   MIN_DISTANCE=1000
+#   git remote add upstream https://github.com/openvswitch/ovs.git
+#   git fetch upstream
+#   for upstream_head in $(git ls-remote --heads upstream main dpdk-latest branch-2.17 branch-[3456789]* | cut -f 1); do
+#     CURR_BASE=$(git merge-base ${upstream_head} HEAD 2>/dev/null)
+#     if [ ${CURR_BASE} ]; then
+#       DISTANCE=$(git log --oneline ${CURR_BASE}..HEAD | wc -l);
+#       if test ${MIN_DISTANCE} -gt ${DISTANCE}; then
+#         BASE_SHA=${CURR_BASE}
+#         MIN_DISTANCE=${DISTANCE}
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      vmpeak_nodes:
+        description: 'Number of nodes for VmPeak benchmark'
+        default: '2000'
+        type: string
+      valgrind_nodes:
+        description: 'Number of nodes for Valgrind benchmark'
+        default: '1000'
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark-vmpeak:
+    name: VmPeak (${{ inputs.vmpeak_nodes || '2000' }} nodes)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+    - name: checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    - name: install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y autoconf automake libtool gcc make \
+          libssl-dev libcap-ng-dev python3 libunbound-dev
+
+    - name: build OVS
+      run: |
+        cd ovs
+        ./boot.sh
+        ./configure
+        make -j$(nproc)
+
+    - name: build OVN
+      run: |
+        ./boot.sh
+        ./configure
+        make -j$(nproc)
+
+    - name: run benchmark
+      run: |
+        NODES=${{ inputs.vmpeak_nodes || '2000' }}
+        RESULTS=$(pwd)/benchmark-results.json
+
+        cat > /tmp/run-benchmark.sh << EOF
+        #!/bin/bash
+        set -e
+        ./ovn-benchmark.sh $NODES --json -o $RESULTS
+        EOF
+        chmod +x /tmp/run-benchmark.sh
+
+        cd tutorial
+        SHELL=/tmp/run-benchmark.sh \
+          ./ovn-sandbox -b $(pwd)/.. \
+          --ovs-src $(pwd)/../ovs \
+          --ovs-build $(pwd)/../ovs
+
+    - name: check for regression
+      run: .ci/perf-compare.sh vmpeak benchmark-results.json
+
+    - name: upload results
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: benchmark-vmpeak
+        path: benchmark-results.json
+
+  benchmark-valgrind:
+    name: Valgrind (${{ inputs.valgrind_nodes || '1000' }} nodes)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+    - name: checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    - name: install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y autoconf automake libtool gcc make \
+          libssl-dev libcap-ng-dev python3 libunbound-dev valgrind
+
+    - name: build OVS
+      run: |
+        cd ovs
+        ./boot.sh
+        ./configure
+        make -j$(nproc)
+
+    - name: build OVN
+      run: |
+        ./boot.sh
+        ./configure
+        make -j$(nproc)
+
+    - name: run benchmark
+      run: |
+        NODES=${{ inputs.valgrind_nodes || '1000' }}
+        RESULTS=$(pwd)/benchmark-results.json
+
+        cat > /tmp/run-benchmark.sh << EOF
+        #!/bin/bash
+        set -e
+        ./ovn-benchmark.sh $NODES -v --json -o $RESULTS
+        EOF
+        chmod +x /tmp/run-benchmark.sh
+
+        cd tutorial
+        SHELL=/tmp/run-benchmark.sh \
+          ./ovn-sandbox -b $(pwd)/.. \
+          --ovs-src $(pwd)/../ovs \
+          --ovs-build $(pwd)/../ovs
+
+    - name: check for regression
+      run: .ci/perf-compare.sh valgrind benchmark-results.json
+
+    - name: upload results
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: benchmark-valgrind
+        path: benchmark-results.json

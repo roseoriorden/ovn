@@ -79,12 +79,15 @@ EXTRA_DIST = \
 	.ci/osx-prepare.sh \
 	.ci/ovn-kubernetes/prepare.sh \
 	.ci/ovn-kubernetes/custom.patch \
+	.ci/perf-baseline.json \
+	.ci/perf-compare.sh \
 	.github/workflows/containers.yml \
 	.github/workflows/test.yml \
 	.github/workflows/test-arm.yml \
 	.github/workflows/ovn-kubernetes.yml \
 	.github/workflows/ovn-fake-multinode-tests.yml \
 	.github/workflows/ovn-upgrade-tests.yml \
+	.github/workflows/perf-benchmark.yml \
 	.readthedocs.yaml \
 	boot.sh \
 	$(MAN_FRAGMENTS) \

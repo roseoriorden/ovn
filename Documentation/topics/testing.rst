@@ -331,6 +331,27 @@ transactions via ``ovn-benchmark.py``.
    ``ovn-northd`` and ``ovn-controller`` process one large batch of changes
    rather than reacting to each transaction incrementally.
 
+CI Performance Benchmark
+''''''''''''''''''''''''
+
+The ``perf-benchmark.yml`` GitHub Actions workflow runs ``ovn-benchmark``
+automatically on every push to ``main``.  It executes two parallel jobs:
+
+- **VmPeak** (1000 nodes by default): measures peak virtual memory.
+- **Valgrind Massif** (500 nodes by default): measures peak heap allocation.
+
+Results are compared against thresholds stored in ``.ci/perf-baseline.json``.
+A job fails if any metric exceeds its threshold plus a tolerance percentage
+(default 20%).  Results are uploaded as GitHub Actions artifacts and summarized
+in the job's step summary.
+
+To trigger the benchmark on demand with custom node counts, use the
+``workflow_dispatch`` trigger from the Actions tab and specify
+``vmpeak_nodes`` and ``valgrind_nodes`` inputs.
+
+To update the baseline, run the benchmark locally (or check the CI artifact
+output), then update the threshold values in ``.ci/perf-baseline.json``.
+
 OVN Upgrade Testing
 ~~~~~~~~~~~~~~~~~~~
 

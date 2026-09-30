@@ -1,0 +1,20 @@
+{
+    "vmpeak": {
+        "nodes": 2000,
+        "thresholds": {
+            "ovn-northd_mb": 2750,
+            "ovn-controller_mb": 2350,
+            "time_seconds": 200
+        },
+        "tolerance_pct": 20
+    },
+    "valgrind": {
+        "nodes": 1000,
+        "thresholds": {
+            "ovn-northd_mb": 1200,
+            "ovn-controller_mb": 960,
+            "time_seconds": 180
+        },
+        "tolerance_pct": 20
+    }
+}

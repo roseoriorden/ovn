@@ -11,6 +11,8 @@ FINAL_PEAK_MB=()
 DEBUG=false
 BATCH_SIZE=""
 VALGRIND_MODE=false
+JSON_MODE=false
+JSON_OUTPUT=""
 VALGRIND_PIDS=()
 MASSIF_FILES=()
 BENCHMARK_TMPDIR=""
@@ -68,6 +70,9 @@ while [[ $# -gt 0 ]]; do
                  "(default: NODES/10)"
             echo "  -v, --valgrind        Track heap with Valgrind Massif"
             echo "                        (much slower, most accurate)"
+            echo "  -j, --json            Write results as JSON"
+            echo "  -o, --json-output F   JSON output path" \
+                 "(default: benchmark-results.json)"
             echo "  -d, --debug           Enable debug output"
             echo "  -h, --help            Show this help message"
             echo ""
@@ -94,6 +99,15 @@ while [[ $# -gt 0 ]]; do
         -v|--valgrind)
             VALGRIND_MODE=true
             shift
+            ;;
+        -j|--json)
+            JSON_MODE=true
+            shift
+            ;;
+        -o|--json-output)
+            JSON_MODE=true
+            JSON_OUTPUT="$2"
+            shift 2
             ;;
         -d|--debug)
             DEBUG=true
@@ -385,3 +399,29 @@ for i in "${!PROCESS_NAME[@]}"; do
 done
 echo "========================="
 echo ""
+
+if [ "$JSON_MODE" = true ]; then
+    JSON_OUTPUT=${JSON_OUTPUT:-benchmark-results.json}
+    if [ "$VALGRIND_MODE" = true ]; then
+        mode="valgrind"
+    else
+        mode="vmpeak"
+    fi
+    {
+        printf '{\n'
+        printf '  "mode": "%s",\n' "$mode"
+        printf '  "nodes": %d,\n' "$NODES"
+        printf '  "time_seconds": %d.%02d,\n' "$ELAPSED_SECS" "$ELAPSED_HSECS"
+        printf '  "memory_mb": {\n'
+        for i in "${!PROCESS_NAME[@]}"; do
+            printf '    "%s": %d' "${PROCESS_NAME[$i]}" "${FINAL_PEAK_MB[$i]}"
+            if [ "$i" -lt $((${#PROCESS_NAME[@]} - 1)) ]; then
+                printf ','
+            fi
+            printf '\n'
+        done
+        printf '  }\n'
+        printf '}\n'
+    } > "$JSON_OUTPUT"
+    echo "Results written to $JSON_OUTPUT"
+fi
