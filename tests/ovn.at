@@ -47624,3 +47624,69 @@ AT_CHECK([grep "skipping output to input port" \
 OVN_CLEANUP([hv1])
 AT_CLEANUP
 ])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([--wait=hv waits for patch port flows])
+
+ovn_start
+
+check ovn-nbctl ls-add ls1
+net_add n
+
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+ovn_attach n br-phys 192.168.0.1
+
+check ovn-nbctl lsp-add ls1 lsp1
+check as hv1 ovs-vsctl --no-wait -- add-port br-int vif1 \
+                    -- set Interface vif1 external_ids:iface-id=lsp1 \
+                    -- set Interface vif1 type=internal
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+n_flows=$(ovs-ofctl dump-flows br-int | wc -l)
+nb_cfg=$(fetch_column nb:NB_Global nb_cfg)
+
+sleep_ovsdb hv1
+
+# Add a localnet port.  ovn-controller will try to create patch ports, but
+# ovsdb-server is asleep so the transaction cannot commit.
+check ovn-nbctl --wait=sb lsp-add-localnet-port ls1 ln1 phys
+
+# Wait for ovn-controller to process the localnet port change before
+# pausing ovs-vswitchd.
+OVS_WAIT_UNTIL([test "$(ovs-ofctl dump-flows br-int | wc -l)" -gt $n_flows])
+
+# Pause ovs-vswitchd so it cannot assign ofport when ovsdb wakes up.
+sleep_ovs hv1
+wake_up_ovsdb hv1
+
+# ovn-controller is now notified about patch port creation, but
+# ovs-vswitchd is asleep so ofport is not assigned.  --wait=hv must
+# not succeed yet.
+if ! ovn-nbctl --timeout=1 --wait=hv sync; then
+    wake_up_ovs hv1
+fi
+
+check ovn-nbctl --wait=hv sync
+
+# Verify that nb_cfg has advanced past the value from before the localnet port
+# was added.
+check_row_count Chassis_Private 1 name=hv1 nb_cfg\>${nb_cfg}
+
+# Pause ovn-controller so we can inspect the flow table.
+sleep_controller hv1
+wake_up_ovs hv1
+
+# Verify that the patch port has an ofport and a corresponding flow.
+check ovs-vsctl wait-until Interface patch-br-int-to-ln1 "ofport>0"
+ofport=$(ovs-vsctl --bare --columns ofport \
+    find Interface name=patch-br-int-to-ln1)
+AT_CHECK([ovs-ofctl dump-flows br-int table=OFTABLE_PHY_TO_LOG \
+    | grep -q in_port=$ofport], [0], [])
+
+wake_up_controller hv1
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])

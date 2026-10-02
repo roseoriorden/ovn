@@ -36,7 +36,10 @@ struct shash;
 void add_ovs_bridge_mappings(const struct ovsrec_open_vswitch_table *ovs_table,
                              const struct ovsrec_bridge_table *bridge_table,
                              struct shash *bridge_mappings);
-void patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
+void find_patch_ports(struct ovsdb_idl_index *ovsrec_port_by_name,
+                      const struct ovsrec_bridge *br_int,
+                      struct shash *existing_ports);
+bool patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
                struct ovsdb_idl_index *sbrec_port_binding_by_type,
                const struct ovsrec_bridge_table *,
                const struct ovsrec_open_vswitch_table *,

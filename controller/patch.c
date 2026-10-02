@@ -71,10 +71,13 @@ match_patch_port(const struct ovsrec_port *port, const char *peer)
 
 /* Creates a patch port in bridge 'src' named 'src_name', whose peer is
  * 'dst_name' in bridge 'dst'.  Initializes the patch port's external-ids:'key'
- * to 'key'.
+ * to 'key'.  The port is only created if 'ovs_idl_txn' is non-NULL.
  *
- * If such a patch port already exists, removes it from 'existing_ports'. */
-static void
+ * If such a patch port already exists in 'src', removes it from
+ * 'existing_ports' and returns false.
+ *
+ * Otherwise, creates port (if 'ovs_idl_txn'), and returns true. */
+static bool
 create_patch_port(struct ovsdb_idl_txn *ovs_idl_txn,
                   const char *key, const char *value,
                   const struct ovsrec_bridge *src, const char *src_name,
@@ -85,8 +88,12 @@ create_patch_port(struct ovsdb_idl_txn *ovs_idl_txn,
         if (match_patch_port(src->ports[i], dst_name)) {
             /* Patch port already exists on 'src'. */
             shash_find_and_delete(existing_ports, src->ports[i]->name);
-            return;
+            return false;
         }
+    }
+
+    if (!ovs_idl_txn) {
+        return true;
     }
 
     ovsdb_idl_txn_add_comment(ovs_idl_txn,
@@ -97,6 +104,7 @@ create_patch_port(struct ovsdb_idl_txn *ovs_idl_txn,
     const struct smap port_ids = SMAP_CONST1(&port_ids, key, value);
     ovsport_create(ovs_idl_txn, src, src_name, "patch", &port_ids, NULL,
                    &if_options, 0);
+    return true;
 }
 
 static void
@@ -165,7 +173,12 @@ add_ovs_bridge_mappings(const struct ovsrec_open_vswitch_table *ovs_table,
     }
 }
 
-static void
+/* Adds the patch ports needed by the port bindings of type 'pb_type' that are
+ * local to this chassis.
+ *
+ * Returns true if all of those patch ports are already present in the
+ * database. */
+static bool
 add_bridge_mappings_by_type(struct ovsdb_idl_txn *ovs_idl_txn,
                             struct ovsdb_idl_index *sbrec_port_binding_by_type,
                             const struct ovsrec_bridge *br_int,
@@ -178,6 +191,8 @@ add_bridge_mappings_by_type(struct ovsdb_idl_txn *ovs_idl_txn,
 {
     struct sbrec_port_binding *target =
         sbrec_port_binding_index_init_row(sbrec_port_binding_by_type);
+    bool synced = true;
+
     sbrec_port_binding_index_set_type(target, pb_type);
 
     const struct sbrec_port_binding *binding;
@@ -225,20 +240,32 @@ add_bridge_mappings_by_type(struct ovsdb_idl_txn *ovs_idl_txn,
 
         char *name1 = patch_port_name(br_int->name, binding->logical_port);
         char *name2 = patch_port_name(binding->logical_port, br_int->name);
-        create_patch_port(ovs_idl_txn, patch_port_id, binding->logical_port,
-                          br_int, name1, br_ln, name2, existing_ports);
-        create_patch_port(ovs_idl_txn, patch_port_id, binding->logical_port,
-                          br_ln, name2, br_int, name1, existing_ports);
+        bool br_int_port_exists =
+            !create_patch_port(ovs_idl_txn, patch_port_id,
+                               binding->logical_port,
+                               br_int, name1, br_ln, name2,
+                               existing_ports);
+        bool br_ln_port_exists =
+            !create_patch_port(ovs_idl_txn, patch_port_id,
+                               binding->logical_port,
+                               br_ln, name2, br_int, name1,
+                               existing_ports);
+
+        synced = synced && br_int_port_exists && br_ln_port_exists;
         free(name1);
         free(name2);
     }
     sbrec_port_binding_index_destroy_row(target);
+    return synced;
 }
 
 /* Obtains external-ids:ovn-bridge-mappings from OVSDB and adds patch ports for
  * the local bridge mappings.  Removes any patch ports for bridge mappings that
- * already existed from 'existing_ports'. */
-static void
+ * already existed from 'existing_ports'.
+ *
+ * Returns true if all of the required patch ports are already present in the
+ * database. */
+static bool
 add_bridge_mappings(struct ovsdb_idl_txn *ovs_idl_txn,
                     struct ovsdb_idl_index *sbrec_port_binding_by_type,
                     const struct ovsrec_bridge_table *bridge_table,
@@ -253,10 +280,12 @@ add_bridge_mappings(struct ovsdb_idl_txn *ovs_idl_txn,
 
     add_ovs_bridge_mappings(ovs_table, bridge_table, &bridge_mappings);
 
-    add_bridge_mappings_by_type(ovs_idl_txn, sbrec_port_binding_by_type,
-                                br_int, existing_ports, chassis,
-                                &bridge_mappings, "l2gateway",
-                                "ovn-l2gateway-port", local_datapaths, true);
+    bool l2gateway_synced =
+        add_bridge_mappings_by_type(ovs_idl_txn, sbrec_port_binding_by_type,
+                                    br_int, existing_ports, chassis,
+                                    &bridge_mappings, "l2gateway",
+                                    "ovn-l2gateway-port", local_datapaths,
+                                    true);
 
     /* Since having localnet ports that are not mapped on some chassis is a
      * supported configuration used to implement multisegment switches with
@@ -264,11 +293,15 @@ add_bridge_mappings(struct ovsdb_idl_txn *ovs_idl_txn,
      * run but don't unnecessarily pollute the log file; pass
      * 'log_missing_bridge = false'.
      */
-    add_bridge_mappings_by_type(ovs_idl_txn, sbrec_port_binding_by_type,
-                                br_int, existing_ports, NULL,
-                                &bridge_mappings, "localnet",
-                                "ovn-localnet-port", local_datapaths, false);
+    bool localnet_synced =
+        add_bridge_mappings_by_type(ovs_idl_txn, sbrec_port_binding_by_type,
+                                    br_int, existing_ports, NULL,
+                                    &bridge_mappings, "localnet",
+                                    "ovn-localnet-port", local_datapaths,
+                                    false);
+
     shash_destroy(&bridge_mappings);
+    return l2gateway_synced && localnet_synced;
 }
 
 static const struct ovsrec_port *
@@ -286,26 +319,14 @@ get_port(struct ovsdb_idl_index *ovsrec_port_by_name, const char *name)
 }
 
 void
-patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
-          struct ovsdb_idl_index *sbrec_port_binding_by_type,
-          const struct ovsrec_bridge_table *bridge_table,
-          const struct ovsrec_open_vswitch_table *ovs_table,
-          struct ovsdb_idl_index *ovsrec_port_by_name,
-          const struct ovsrec_bridge *br_int,
-          const struct sbrec_chassis *chassis,
-          const struct hmap *local_datapaths)
+find_patch_ports(struct ovsdb_idl_index *ovsrec_port_by_name,
+                 const struct ovsrec_bridge *br_int,
+                 struct shash *existing_ports)
 {
-    if (!ovs_idl_txn) {
-        return;
-    }
-
-    /* Figure out what patch ports already exist.
-     *
-     * ovn-controller does not create or use ports of type "ovn-l3gateway-port"
+    /* ovn-controller does not create or use ports of type "ovn-l3gateway-port"
      * or "ovn-logical-patch-port", but older version did.  We still recognize
-     * them here, so that we delete them at the end of this function, to avoid
-     * leaving useless ports on upgrade. */
-    struct shash existing_ports = SHASH_INITIALIZER(&existing_ports);
+     * them here, so they can be marked for deletion, to avoid leaving useless
+     * ports on upgrade. */
     const struct ovsrec_port *port;
     for (size_t i = 0; i < br_int->n_ports; i++) {
         port = br_int->ports[i];
@@ -313,7 +334,7 @@ patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
             || smap_get(&port->external_ids, "ovn-l2gateway-port")
             || smap_get(&port->external_ids, "ovn-l3gateway-port")
             || smap_get(&port->external_ids, "ovn-logical-patch-port")) {
-            shash_add(&existing_ports, port->name, port);
+            shash_add(existing_ports, port->name, port);
             /* Also add peer ports to the list. */
             for (size_t j = 0; j < port->n_interfaces; j++) {
                 struct ovsrec_interface *p_iface = port->interfaces[j];
@@ -325,19 +346,51 @@ patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
                     const struct ovsrec_port *peer_port =
                         get_port(ovsrec_port_by_name, peer_name);
                     if (peer_port) {
-                        shash_add(&existing_ports, peer_port->name, peer_port);
+                        shash_add(existing_ports, peer_port->name, peer_port);
                     }
                 }
             }
         }
     }
+}
+
+/* Adds to the local OVS database the patch ports required by the localnet
+ * and l2gateway ports that are local to this chassis and removes the ones
+ * that are no longer needed.  The database is only updated if 'ovs_idl_txn'
+ * is non-NULL.
+ *
+ * Returns true if the database already reflects the required set of patch
+ * ports. */
+bool
+patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
+          struct ovsdb_idl_index *sbrec_port_binding_by_type,
+          const struct ovsrec_bridge_table *bridge_table,
+          const struct ovsrec_open_vswitch_table *ovs_table,
+          struct ovsdb_idl_index *ovsrec_port_by_name,
+          const struct ovsrec_bridge *br_int,
+          const struct sbrec_chassis *chassis,
+          const struct hmap *local_datapaths)
+{
+    if (!ovs_idl_txn) {
+        return true;
+    }
+
+    /* Figure out what patch ports already exist. */
+    struct shash existing_ports = SHASH_INITIALIZER(&existing_ports);
+    const struct ovsrec_port *port;
+    find_patch_ports(ovsrec_port_by_name, br_int, &existing_ports);
 
     /* Create in the database any patch ports that should exist.  Remove from
      * 'existing_ports' any patch ports that do exist in the database and
      * should be there. */
-    add_bridge_mappings(ovs_idl_txn, sbrec_port_binding_by_type, bridge_table,
-                        ovs_table, br_int, &existing_ports, chassis,
-                        local_datapaths);
+    bool synced = add_bridge_mappings(ovs_idl_txn, sbrec_port_binding_by_type,
+                                      bridge_table, ovs_table, br_int,
+                                      &existing_ports, chassis,
+                                      local_datapaths);
+
+    if (!shash_is_empty(&existing_ports)) {
+        synced = false;
+    }
 
     /* Now 'existing_ports' only still contains patch ports that exist in the
      * database but shouldn't.  Delete them from the database. */
@@ -355,4 +408,5 @@ patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
         }
     }
     shash_destroy(&existing_ports);
+    return synced;
 }
